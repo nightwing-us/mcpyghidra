@@ -1,0 +1,43 @@
+mcpyghidra
+Copyright 2026 Nightwing Group, LLC.
+
+This product is licensed under the Apache License, Version 2.0
+(see the LICENSE file in the root of this repository).
+
+------------------------------------------------------------------------
+Third-party attributions
+------------------------------------------------------------------------
+
+This product includes or depends on software developed by third parties.
+The entries below cover dependencies whose licenses require attribution
+in a NOTICE file (Apache-2.0 and MPL-2.0).  The full resolved dependency
+graph is recorded in uv.lock at release time.
+
+  * pyghidra-decaf (https://github.com/nightwing-us/pyghidra-decaf)
+    Copyright 2026 Nightwing Group, LLC.
+    Licensed under the Apache License, Version 2.0.
+
+  * Ghidra (https://ghidra-sre.org/)
+    Copyright 2017 National Security Agency
+    Licensed under the Apache License, Version 2.0.
+
+  * pyghidra (https://github.com/NationalSecurityAgency/pyghidra)
+    Copyright 2017 National Security Agency
+    Licensed under the Apache License, Version 2.0.
+
+  * JPype (https://github.com/jpype-project/jpype)
+    Copyright 2004-2024 JPype contributors
+    Licensed under the Apache License, Version 2.0.
+
+  * python-multipart (https://github.com/Kludex/python-multipart)
+    Licensed under the Apache License, Version 2.0.
+
+  * certifi (https://github.com/certifi/python-certifi)
+    Licensed under the Mozilla Public License, Version 2.0.
+    (Pulled transitively via the MCP SDK's httpx dependency.)
+
+Other runtime dependencies (fastapi, starlette, uvicorn, mcp, anyio,
+httpx, pydantic, asgi-lifespan, and their transitive deps) are MIT-,
+BSD-, or PSF-licensed and do not require attribution in this NOTICE
+file; their license terms still apply and travel with each installed
+package.  The authoritative full dependency graph is recorded in uv.lock.

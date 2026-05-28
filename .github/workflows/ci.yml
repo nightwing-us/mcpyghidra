@@ -1,0 +1,73 @@
+name: CI
+
+# NOTE: Scope of this workflow
+# ────────────────────────────
+# Integration and e2e tests require a Ghidra installation
+# (GHIDRA_INSTALL_DIR=/opt/ghidra with Ghidra ≥12.0) and the
+# pyghidra_decaf bootstrap shim, which are not available on
+# GitHub-hosted runners. Those test tiers run in a separate
+# environment with a Ghidra installation available.
+#
+# This workflow therefore runs only the Ghidra-free tiers:
+#   • Lint      — ruff check + ruff format --check (src/)
+#   • Typecheck — mypy (config in root pyproject.toml; targets src/mcpyghidra)
+#   • Unit tests — pytest tests/unit/  (no Ghidra runtime needed)
+#
+# Python matrix: 3.10-3.13 — the full supported range advertised in
+# pyproject.toml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history needed by hatch-vcs to derive version from tags
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install uv
+        run: pip install --upgrade uv
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint — ruff check
+        run: ruff check src tests
+
+      - name: Lint — ruff format check
+        run: ruff format --check src
+
+      - name: Type-check (mypy)
+        # mypy config in root pyproject.toml: packages = ["mcpyghidra"], mypy_path = "src"
+        run: mypy
+
+      - name: Unit tests (pytest)
+        # Integration and e2e tests require Ghidra; run unit tier only here.
+        run: pytest tests/unit/ -v --tb=short
