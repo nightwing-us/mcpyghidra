@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import importlib.util
 import inspect
 import json
 import logging
 import os
+import sys
 import typing
 from contextlib import asynccontextmanager
 from typing import (
@@ -45,9 +47,11 @@ from mcpyghidra.rpc_callbacks import (
     RPCError,
     RPCNamespace,
     RPCTimeoutError,
+    ToolNamespace,
     generate_callback_function,
     is_name_safe,
     map_exception,
+    project_name,
 )
 from mcpyghidra.rpc_types import (
     CallFunctionException,
@@ -362,6 +366,71 @@ async def _discover_rpc_functions(session: Any) -> RPCNamespace | None:
     return namespace
 
 
+def _install_rpc_path(
+    roots: dict[str, Any],
+    path: list[str],
+    fn: Any,
+) -> bool:
+    """Insert callable *fn* into the nested namespace tree at *path*.
+
+    All but the last segment are namespace levels (auto-created as
+    ToolNamespace); the last segment is the callable leaf. Returns ``False``
+    and installs nothing on a conflict:
+
+    - a namespace segment is already bound to a callable (cannot nest under it)
+    - the leaf slot is already occupied (by a namespace or another callable)
+
+    Args:
+        roots: Top-level mapping (name -> ToolNamespace | callable).
+        path: Attribute path segments (length >= 1).
+        fn: The callback wrapper to bind at the leaf.
+
+    Returns:
+        True if installed, False on conflict.
+    """
+    *ns_segs, leaf = path
+    children = roots
+    prefix: list[str] = []
+    for seg in ns_segs:
+        prefix.append(seg)
+        node = children.get(seg)
+        if node is None:
+            node = ToolNamespace('.'.join(prefix))
+            children[seg] = node
+        elif not isinstance(node, ToolNamespace):
+            return False  # a callable occupies this path — cannot nest under it
+        children = node._children
+    if leaf in children:
+        return False  # leaf slot already taken (namespace or duplicate callable)
+    children[leaf] = fn
+    return True
+
+
+def _shadows_real_module(name: str) -> bool:
+    """True if *name* names an importable module/package.
+
+    A projected faux top-level with such a name would shadow the real module in
+    the script's import machinery (see the REPL ``__import__`` support in
+    tools/scripting.py), so it must be escaped. ``mcp`` is the one blessed
+    exception: the real MCP SDK is never used inside the pyghidra REPL, so
+    ``mcp.*`` is the intended faux import root.
+    """
+    if name == 'mcp':
+        return False
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+def _top_level_collides(name: str, existing_globals: dict[str, Any]) -> bool:
+    """A projected top-level *name* is unsafe if it would shadow a Python
+    builtin/keyword, an existing scripting global, or an importable module."""
+    return not is_name_safe(name, existing_globals) or _shadows_real_module(name)
+
+
 def _build_rpc_globals(
     namespace: RPCNamespace,
     session: Any,
@@ -370,42 +439,89 @@ def _build_rpc_globals(
 ) -> dict[str, Any]:
     """Generate per-execution callback globals from a discovered RPCNamespace.
 
-    Creates fresh callback function wrappers bound to *scope* and *session*
-    for all definitions stored in *namespace*.  Only injects functions whose
-    names pass is_name_safe() against *existing_globals*.
+    Projects ``__``-separated function names into nested ``ToolNamespace``
+    objects: ``mcp__ghidra1__list`` becomes ``mcp.ghidra1.list(...)``. Names
+    with no ``__`` separator stay flat globals (``search_web``). The script-
+    facing ``rpc`` object is no longer injected — native ``help()``/``dir()``
+    cover discovery.
+
+    Processing is in sorted raw-name order (deterministic). For each function:
+
+    1. ``project_name`` parses the path (per-segment hard-keyword escaping);
+       a name yielding no segments is skipped with a warning.
+    2. The top-level segment — the only real global — is checked against
+       *existing_globals* and the builtin/keyword denylist via ``is_name_safe``;
+       on collision it is escaped with a leading underscore, and skipped if it
+       still collides.
+    3. ``_install_rpc_path`` walks/creates the namespace tree and binds the
+       wrapper at the leaf; a leaf-vs-namespace or duplicate-path conflict is
+       skipped with a warning ("first claim wins").
 
     Args:
         namespace:       The cached RPCNamespace populated by _discover_rpc_functions.
-        session:         The ServerSession for this tool call (used by rpc_caller stub).
+        session:         The ServerSession for this tool call (used by rpc_caller).
         scope:           The CallbackScope for this execution.
         existing_globals: The current script globals (used for collision detection).
 
     Returns:
-        A dict of {name: callable} to merge into script globals.  Always
-        includes the 'rpc' key pointing to a fresh RPCNamespace.
+        A dict of top-level name -> (ToolNamespace | callable) to merge into
+        script globals, e.g. ``{'mcp': <ns>, 'search_web': <fn>}``. The keys
+        are the only globals added (and later popped) by the scripting layer.
     """
-    new_functions: dict[str, Any] = {}
-    new_definitions: dict[str, FunctionDefinition] = {}
+    roots: dict[str, Any] = {}
 
     rpc_caller = _make_sync_caller(session, scope)
 
-    for name, defn in namespace._definitions.items():
-        if not is_name_safe(name, existing_globals):
-            logger.debug(
-                'Skipping callback %r: name collision with existing globals', name
+    for raw in sorted(namespace._definitions):
+        defn = namespace._definitions[raw]
+        path = project_name(raw)
+        if path is None:
+            logger.warning(
+                'Skipping callback %r: name yields no namespace segments', raw
             )
             continue
+
+        # The first segment is the only actual global / importable root — guard
+        # it against builtins/keywords, existing script globals, AND real
+        # importable modules, escaping then skipping.
+        top = path[0]
+        if _top_level_collides(top, existing_globals):
+            escaped = '_' + top
+            if _top_level_collides(escaped, existing_globals):
+                logger.warning(
+                    'Skipping callback %r: top-level name %r collides (builtin, '
+                    'global, or importable module) even after escaping',
+                    raw,
+                    top,
+                )
+                continue
+            top = escaped
+        path = [top, *path[1:]]
+
+        # mcp.self.* is reserved for this server's own in-process tools — never
+        # let a reverse-RPC projection land there.
+        if path[:2] == ['mcp', 'self']:
+            logger.warning(
+                'Skipping callback %r: mcp.self.* is reserved for in-process tools',
+                raw,
+            )
+            continue
+
         fn = generate_callback_function(defn, rpc_caller, scope, namespace)
-        new_functions[name] = fn
-        new_definitions[name] = defn
+        # Display the projected dotted path in help()/repr (and tracebacks)
+        # instead of the raw __-separated wire name: mcp__svc__list is reached
+        # as mcp.svc.list, so help(mcp.svc.list) should read "mcp.svc.list".
+        dotted = '.'.join(path)
+        fn.__name__ = dotted
+        fn.__qualname__ = dotted
+        if not _install_rpc_path(roots, path, fn):
+            logger.warning(
+                'Skipping callback %r: namespace/leaf conflict at %r',
+                raw,
+                dotted,
+            )
 
-    # Build an execution-specific RPCNamespace with freshly-bound wrappers.
-    exec_namespace = RPCNamespace()
-    exec_namespace.update_functions(new_functions, new_definitions)
-
-    injected: dict[str, Any] = {'rpc': exec_namespace}
-    injected.update(new_functions)
-    return injected
+    return roots
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +640,7 @@ class McpToolRegistration:
             ('create_struct', 'create_struct', {}, False),
             ('add_field', 'add_field', {}, False),
             # Scripting
-            ('pyghidra_eval', 'pyghidra', {}, False),
+            ('pyghidra_eval', 'pyghidra', {'executesCode': True}, False),
             # Search tools
             ('find_bytes', 'find_bytes', {'readOnlyHint': True}, True),
             ('find_insns', 'find_insns', {'readOnlyHint': True}, True),
@@ -726,7 +842,7 @@ class McpToolRegistration:
                 )
             ),
         ],
-        ctx: Context | None = None,
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> Any:
         """Rename symbol(s). Each item: {new_name, addr?, name?}. Batched with per-item errors.
 
@@ -756,7 +872,7 @@ class McpToolRegistration:
                 )
             ),
         ],
-        ctx: Context | None = None,
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> Any:
         """Rename and/or retype multiple variables in a function at once.
 
@@ -793,7 +909,7 @@ class McpToolRegistration:
                 )
             ),
         ],
-        ctx: Context | None = None,
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> Any:
         """Set comment(s). MERGED 3-in-1. Each item: {comment, kind?, addr?, name?, line?}
 
@@ -842,7 +958,7 @@ class McpToolRegistration:
                 )
             ),
         ],
-        ctx: Context | None = None,
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> Any:
         """Set function prototype(s). Each item: {addr, prototype}. Batched.
 
@@ -1052,7 +1168,13 @@ class McpToolRegistration:
                 )
             ),
         ] = False,
-        ctx: Context | None = None,
+        # NOTE: must be plain `Context`, NOT `Context | None`. FastMCP's
+        # context-param detection skips any parameter whose annotation has a
+        # typing origin (Union/Optional), so `Context | None` is never injected
+        # and arrives as None — silently disabling RPC callback discovery (and,
+        # in the write handlers, elicitation). Plain `Context` is detected and
+        # injected; the `= None` default only covers direct/test calls.
+        ctx: Context = None,  # type: ignore[assignment]
     ) -> dict:
         """Execute Python code in Ghidra context with full API access.
 

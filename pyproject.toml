@@ -108,6 +108,14 @@ explicit_package_bases = true
 namespace_packages = true
 plugins = ["pydantic.mypy"]
 
+# custom_types_312.py uses PEP 695 `type` syntax (3.12+). mypy's own
+# parser is bound to the Python it runs under, so on the 3.10/3.11 matrix
+# legs it raises "Invalid syntax" before any type-checking. The
+# custom_types_p312.py sibling provides equivalent definitions for older
+# Pythons; mirrors the ruff `extend-exclude` and the coverage `omit` already
+# in this file.
+exclude = ["src/mcpyghidra/custom_types_312\\.py$"]
+
 # Ghidra / pyghidra / Java bridge modules have no type stubs (they're
 # loaded through the JVM at runtime, so static analysis can't resolve
 # them). Suppress import-not-found / import-untyped for the whole

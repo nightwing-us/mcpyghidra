@@ -1,6 +1,6 @@
 """E2E test: prove that headless launch works.
 
-This test IS the contract for wingman integration.
+This test IS the contract for MCP client integration.
 If it passes, any MCP client can launch mcpyghidra-headless
 and connect to the server.
 

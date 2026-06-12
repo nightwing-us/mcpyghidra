@@ -1,9 +1,10 @@
 """
 invoke tasks — local developer workflow for building and publishing MCPyGhidra.
 
-Publishing to PyPI requires a ~/.pypirc file with a [mcpyghidra] section,
-or set TWINE_USERNAME / TWINE_PASSWORD environment variables.
-See https://packaging.python.org/en/latest/guides/distributing-packages-using-setuptools/#uploading-your-project-to-pypi
+Normal releases are published automatically by .github/workflows/release.yml
+when a v* tag is pushed; the `publish` task here is for one-off local uploads.
+Reads credentials from ~/.pypirc (default [pypi] section) or from
+TWINE_USERNAME / TWINE_PASSWORD environment variables.
 
 Quick reference:
   inv install-tools   install build and twine into the current environment
@@ -40,10 +41,11 @@ def build(ctx):
 
 @task
 def publish(ctx):
-    """Upload dist/* to PyPI via twine.
+    """Manually upload dist/* to PyPI via twine.
 
-    Reads credentials from ~/.pypirc under the [mcpyghidra] section,
-    or from TWINE_USERNAME / TWINE_PASSWORD environment variables.
+    Normal releases are published automatically by .github/workflows/release.yml
+    when a v* tag is pushed; use this task only for one-off local uploads.
+    Reads credentials from ~/.pypirc (or TWINE_USERNAME / TWINE_PASSWORD).
     Run `inv build` first if dist/ is empty.
     """
-    ctx.run("python -m twine upload --repository mcpyghidra dist/*")
+    ctx.run("python -m twine upload dist/*")

@@ -218,10 +218,50 @@ When raising exceptions in the scripting environment from a remote error respons
 
 ## Scripting Integration
 
-Servers typically inject callback functions into the scripting environment as:
+Servers project discovered callback functions into the scripting environment by
+interpreting `__` separators in a function name as namespace boundaries (see
+**Namespace Projection** below):
 
-1. **Global functions** — available directly by name: `search_web("query")`
-2. **Namespace object** — available as attributes: `rpc.search_web("query")` with methods like `rpc.available()` for discovery and `rpc.help("search_web")` for documentation.
+1. **Flat globals** — a name with no `__` separator is available directly by
+   name: `search_web("query")`.
+2. **Nested namespaces** — `mcp__ghidra1__list` is projected to
+   `mcp.ghidra1.list("...")`. Native `help(mcp.ghidra1.list)` and
+   `dir(mcp.ghidra1)` cover documentation and discovery.
+
+A flat `rpc` namespace object (`rpc.available()` / `rpc.help(...)`) is an
+**optional, legacy** convenience; the recommended discovery mechanism is native
+`help()` / `dir()` on the projected objects, and reference servers no longer
+inject `rpc`.
+
+### Namespace Projection
+
+A function name is projected to an attribute path by treating runs of two or
+more underscores as a single namespace separator. The projection is purely
+mechanical — **no prefixes are hard-coded**.
+
+- **Greedy separators.** A run of 2+ underscores is one separator:
+  `mcp___ghidra1` → `mcp.ghidra1`, `a____b` → `a.b`.
+- **Leading/trailing/repeated separators collapse.** Empty segments are dropped:
+  `__foo` → `foo`, `foo__` → `foo`, `__mcp__ghidra1__list__` → `mcp.ghidra1.list`.
+- **Single underscores are preserved** within a segment: `search_web`,
+  `find_bytes` stay whole.
+- **No segments** (name was all underscores, e.g. `____`) → the function is
+  **skipped** with a warning.
+- **Hard-keyword segments are escaped** with a leading underscore so they stay
+  reachable as dotted attributes (`mcp.import` is a `SyntaxError`):
+  `mcp__import__x` → `mcp._import.x`. Applies to every segment position.
+  Builtins and soft keywords are valid attribute names and are **not** escaped.
+- **Top-level shadow escaping.** Only the first segment becomes a real global. If
+  it shadows an existing scripting global or a Python builtin/keyword it is
+  escaped with a leading underscore (`list__foo` → `_list.foo`); if the escaped
+  name still collides the function is skipped with a warning. Re-using an
+  existing namespace **root** is not a collision — `mcp__a__x` and `mcp__b__y`
+  both extend the same `mcp` namespace.
+- **Leaf-vs-namespace conflict.** If one name wants a callable at `mcp.ghidra1`
+  and another wants `mcp.ghidra1` to be a namespace, they cannot share the path.
+  Functions are processed in **sorted raw-name order**; the first claim to a path
+  wins and the conflicting function is skipped with a warning. The same rule
+  covers two raw names that collapse to the same path after parsing/escaping.
 
 ### Generating Function Signatures
 
@@ -264,13 +304,33 @@ saved_fn("query")               # raises RuntimeError("Callback expired")
 
 ## Name Collision Protection
 
-Function names declared in `mcpy/listFunctions` **MUST NOT** shadow:
+Function names declared in `mcpy/listFunctions` do **not** have to be bare,
+collision-free Python identifiers. Servers protect the scripting environment via
+the server-side **Namespace Projection** (see *Scripting Integration*), which
+handles reserved words and shadowing mechanically:
 
-- Python builtins (e.g., `list`, `print`, `open`, `type`, `id`, `input`, `format`, `vars`)
-- Python keywords (e.g., `for`, `if`, `class`, `import`, `return`)
-- Existing scripting globals defined by the server (e.g., `currentProgram`, `askString` in Ghidra)
+- **Hard keywords** in any segment (e.g. `import`, `class`) are escaped with a
+  leading underscore (`mcp__import` → `mcp._import`) so they remain reachable as
+  dotted attributes.
+- **Top-level globals** — only the first projected segment becomes an actual
+  global / importable root. If it shadows a Python builtin/keyword, an existing
+  scripting global (e.g. `list`, `currentProgram`), or **any importable module**
+  (a name resolvable via the import system — stdlib, the host's API modules
+  (`ghidra`, `ida_*`), or installed packages), it is escaped with a leading
+  underscore; if it still collides, the function is **skipped** with a warning.
+  Protecting importable names matters because a server may make the projected
+  roots importable in the scripting environment, so `import os` must keep
+  reaching the real `os`, not a tool named `os__…`. The server's own root
+  (conventionally `mcp`) is the one blessed exception — it intentionally
+  shadows the unused MCP-SDK package in the REPL.
+- **Path conflicts** (leaf-vs-namespace, or two names that collapse to the same
+  path) are resolved deterministically in sorted raw-name order: first claim
+  wins, the loser is skipped with a warning.
 
-Servers **MUST** maintain a denylist of reserved names and reject or skip any function whose name collides. Rejected functions **SHOULD** be logged with a warning.
+Servers **MUST** check the top-level root against reserved names (Python builtins
++ keywords), existing scripting globals, and importable modules
+(`name in sys.modules` or `importlib.util.find_spec(name)`), and **SHOULD** log
+every skipped or escaped function.
 
 ## Re-Entrancy & Recursion Limits
 

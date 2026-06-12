@@ -6,7 +6,8 @@ and transport interactions are mocked at the Python level.
 Test classes:
 - TestSendCustomRequest    — low-level JSON-RPC helper constructs valid request
 - TestDiscoverRpcFunctions — caching, no-capability path, listFunctions parsing
-- TestBuildRpcGlobals      — namespace injection, name collision, rpc key
+- TestBuildRpcGlobals      — nested namespace projection, escaping, conflicts, no rpc global
+- TestInstallRpcPath       — pure nested-tree insertion + conflict handling
 - TestScriptingIntegration — scope created/invalidated, globals injected per exec
 - TestDeclareRpcCapability — experimental capabilities patched on low-level server
 """
@@ -33,6 +34,7 @@ from mcpyghidra.rpc_callbacks import (  # noqa: E402  # must follow pytestmark /
     RPCError,
     RPCNamespace,
     RPCTimeoutError,
+    ToolNamespace,
     generate_callback_function,
 )
 from mcpyghidra.rpc_types import (  # noqa: E402  # must follow pytestmark / anyio_backend fixture
@@ -42,6 +44,7 @@ from mcpyghidra.server import (  # noqa: E402  # must follow pytestmark / anyio_
     _build_rpc_globals,
     _declare_rpc_capability,
     _discover_rpc_functions,
+    _install_rpc_path,
     _make_sync_caller,
     _on_functions_changed,
     _reset_rpc_discovery,
@@ -598,56 +601,132 @@ class TestDiscoverRpcFunctions:
 # ---------------------------------------------------------------------------
 
 class TestBuildRpcGlobals:
-    """Tests for _build_rpc_globals — per-execution globals injection."""
+    """Tests for _build_rpc_globals — per-execution nested namespace projection."""
 
     def _make_ns(self, names: list[str] | None = None) -> RPCNamespace:
         return _make_populated_namespace(names)
 
-    def test_rpc_key_always_present(self):
-        """'rpc' key is always injected even when all functions have name collisions."""
+    def test_no_rpc_global_injected(self):
+        """The script-facing 'rpc' object is no longer injected (Decision 2)."""
         ns = self._make_ns(['search_web'])
         scope = CallbackScope()
         injected = _build_rpc_globals(ns, None, scope, {})
-        assert 'rpc' in injected
+        assert 'rpc' not in injected
 
-    def test_rpc_value_is_rpc_namespace(self):
-        ns = self._make_ns(['search_web'])
-        scope = CallbackScope()
-        injected = _build_rpc_globals(ns, None, scope, {})
-        assert isinstance(injected['rpc'], RPCNamespace)
-
-    def test_function_globals_injected(self):
-        """Callback function names are injected as top-level globals."""
+    def test_flat_name_stays_top_level_callable(self):
+        """A name with no '__' separator stays a flat top-level global."""
         ns = self._make_ns(['search_web', 'ask_llm'])
-        scope = CallbackScope()
-        injected = _build_rpc_globals(ns, None, scope, {})
-        assert 'search_web' in injected
-        assert 'ask_llm' in injected
-
-    def test_injected_functions_are_callable(self):
-        ns = self._make_ns(['search_web'])
         scope = CallbackScope()
         injected = _build_rpc_globals(ns, None, scope, {})
         assert callable(injected['search_web'])
+        assert callable(injected['ask_llm'])
 
-    def test_name_collision_with_existing_globals_skipped(self):
-        """Functions whose names collide with existing script globals are not injected."""
-        ns = self._make_ns(['search_web', 'ask_llm'])
-        scope = CallbackScope()
-        existing = {'search_web': 'already_here'}
-        injected = _build_rpc_globals(ns, None, scope, existing)
-        # search_web collides — must not be overwritten in injected
-        assert 'search_web' not in injected
-        # ask_llm is safe
-        assert 'ask_llm' in injected
-
-    def test_injected_functions_share_exec_namespace(self):
-        """The 'rpc' namespace and individual globals come from the same RPCNamespace."""
-        ns = self._make_ns(['search_web'])
+    def test_namespaced_name_projects_to_nested(self):
+        """mcp__ghidra1__list -> injected['mcp'].ghidra1.list (callable)."""
+        ns = self._make_ns(['mcp__ghidra1__list'])
         scope = CallbackScope()
         injected = _build_rpc_globals(ns, None, scope, {})
-        rpc_ns = injected['rpc']
-        assert 'search_web' in rpc_ns._functions
+        assert set(injected.keys()) == {'mcp'}
+        assert isinstance(injected['mcp'], ToolNamespace)
+        assert isinstance(injected['mcp'].ghidra1, ToolNamespace)
+        assert callable(injected['mcp'].ghidra1.list)
+
+    def test_projected_leaf_shows_dotted_name_in_help(self):
+        """help()/repr show the dotted path (mcp.ghidra1.list), not mcp__ghidra1__list."""
+        ns = self._make_ns(['mcp__ghidra1__list'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        leaf = injected['mcp'].ghidra1.list
+        assert leaf.__name__ == 'mcp.ghidra1.list'
+        assert leaf.__qualname__ == 'mcp.ghidra1.list'
+
+    def test_sibling_functions_share_namespace_root(self):
+        """mcp__a__x and mcp__b__y both extend the same 'mcp' root."""
+        ns = self._make_ns(['mcp__a__x', 'mcp__b__y'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        assert set(injected.keys()) == {'mcp'}
+        assert callable(injected['mcp'].a.x)
+        assert callable(injected['mcp'].b.y)
+
+    def test_hard_keyword_segment_escaped_in_tree(self):
+        """mcp__import__x -> injected['mcp']._import.x (import is escaped)."""
+        ns = self._make_ns(['mcp__import__x'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        assert callable(injected['mcp']._import.x)
+
+    def test_top_level_builtin_shadow_escaped(self):
+        """list__foo -> top 'list' is a builtin, escaped to '_list.foo'."""
+        ns = self._make_ns(['list__foo'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        assert 'list' not in injected
+        assert callable(injected['_list'].foo)
+
+    def test_importable_module_root_escaped(self):
+        """Any importable-module root (stdlib OR installed) is escaped."""
+        # stdlib module
+        ns = self._make_ns(['os__path__tool'])
+        injected = _build_rpc_globals(ns, None, CallbackScope(), {})
+        assert 'os' not in injected  # real `os` must not be shadowable
+        assert callable(injected['_os'].path.tool)
+        # installed (non-stdlib) package — caught by find_spec, not stdlib lists
+        ns2 = self._make_ns(['anyio__x__tool'])
+        injected2 = _build_rpc_globals(ns2, None, CallbackScope(), {})
+        assert 'anyio' not in injected2
+        assert callable(injected2['_anyio'].x.tool)
+
+    def test_mcp_root_is_blessed_not_escaped(self):
+        """`mcp` is importable (the SDK) but is the blessed faux root, not escaped."""
+        ns = self._make_ns(['mcp__svc__x'])
+        injected = _build_rpc_globals(ns, None, CallbackScope(), {})
+        assert 'mcp' in injected and '_mcp' not in injected
+        assert callable(injected['mcp'].svc.x)
+
+    def test_top_level_existing_global_shadow_escaped(self):
+        """A namespace root colliding with an existing global is escaped."""
+        ns = self._make_ns(['mcp__a__x'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {'mcp': 'already_here'})
+        assert callable(injected['_mcp'].a.x)
+
+    def test_flat_name_collision_with_existing_global_escaped(self):
+        """Flat name colliding with an existing global is escaped to _name."""
+        ns = self._make_ns(['search_web', 'ask_llm'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {'search_web': 'already_here'})
+        # escaped form is injected; the original name is left untouched
+        assert 'search_web' not in injected
+        assert callable(injected['_search_web'])
+        assert callable(injected['ask_llm'])
+
+    def test_top_level_shadow_escape_also_collides_skipped(self):
+        """If both the name and its escaped form already exist, the function is skipped."""
+        ns = self._make_ns(['search_web', 'ask_llm'])
+        scope = CallbackScope()
+        existing = {'search_web': 'x', '_search_web': 'y'}
+        injected = _build_rpc_globals(ns, None, scope, existing)
+        assert 'search_web' not in injected
+        assert '_search_web' not in injected
+        # ask_llm is unaffected
+        assert callable(injected['ask_llm'])
+
+    def test_leaf_vs_namespace_conflict_first_wins(self):
+        """mcp__ghidra1 (leaf) wins over mcp__ghidra1__list (namespace); latter skipped."""
+        ns = self._make_ns(['mcp__ghidra1', 'mcp__ghidra1__list'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        # sorted order: 'mcp__ghidra1' claims the leaf first
+        assert callable(injected['mcp'].ghidra1)
+        assert 'list' not in dir(injected['mcp'].ghidra1)
+
+    def test_all_underscore_name_skipped(self):
+        """A name that yields no segments (all underscores) is skipped."""
+        ns = self._make_ns(['____', 'search_web'])
+        scope = CallbackScope()
+        injected = _build_rpc_globals(ns, None, scope, {})
+        assert set(injected.keys()) == {'search_web'}
 
     def test_scope_invalidation_expires_injected_functions(self):
         """Injected callback functions raise RuntimeError after scope invalidation."""
@@ -659,20 +738,13 @@ class TestBuildRpcGlobals:
         with pytest.raises(RuntimeError, match='Callback expired'):
             fn('hello')
 
-    def test_empty_namespace_returns_only_rpc_key(self):
-        """Empty RPCNamespace yields only the 'rpc' global."""
+    def test_empty_namespace_returns_empty_dict(self):
+        """Empty RPCNamespace yields no globals (no 'rpc' key)."""
         ns = RPCNamespace()
         ns.update_functions({}, {})
         scope = CallbackScope()
         injected = _build_rpc_globals(ns, None, scope, {})
-        assert set(injected.keys()) == {'rpc'}
-
-    def test_rpc_namespace_in_injected_is_available(self):
-        """The injected 'rpc' namespace reports is_available() == True."""
-        ns = self._make_ns(['search_web'])
-        scope = CallbackScope()
-        injected = _build_rpc_globals(ns, None, scope, {})
-        assert injected['rpc'].is_available() is True
+        assert injected == {}
 
 
 # ---------------------------------------------------------------------------
@@ -777,33 +849,50 @@ class TestScriptingIntegration:
                     mock_build_globals.assert_not_called()
 
     def test_rpc_globals_injected_into_persistent_globals(self):
-        """_build_rpc_globals result is merged into _persistent_globals."""
+        """_build_rpc_globals result is merged into _persistent_globals during exec."""
+        import mcpyghidra.tools.scripting as scripting_mod
         from mcpyghidra.tools.scripting import _pyghidra_eval_sync
 
         ns = self._make_ns(['my_callback'])
         backend = self._make_backend()
 
-        injected_globals: dict[str, Any] = {}
+        def _fake_build_globals(namespace, session, scope, existing):
+            return {'mcp': RPCNamespace(), 'my_callback': lambda: 'ok'}
+
+        saved = scripting_mod._persistent_globals
+        scripting_mod._persistent_globals = {'__builtins__': __builtins__}
+        try:
+            with patch('mcpyghidra.server._build_rpc_globals', side_effect=_fake_build_globals):
+                result = _pyghidra_eval_sync(backend, '1', rpc_namespace=ns)
+        finally:
+            scripting_mod._persistent_globals = saved
+
+        assert result.success is True
+
+    def test_rpc_globals_cleaned_up_after_execution(self):
+        """RPC globals injected for an execution are popped from _persistent_globals."""
+        import mcpyghidra.tools.scripting as scripting_mod
+        from mcpyghidra.tools.scripting import _pyghidra_eval_sync
+
+        ns = self._make_ns(['my_callback'])
+        backend = self._make_backend()
 
         def _fake_build_globals(namespace, session, scope, existing):
-            injected_globals['rpc'] = RPCNamespace()
-            injected_globals['my_callback'] = lambda: 'ok'
-            return injected_globals
+            return {'mcp': RPCNamespace(), 'my_callback': lambda: 'ok'}
 
-        captured_persistent: list[dict] = []
+        saved = scripting_mod._persistent_globals
+        scripting_mod._persistent_globals = {'__builtins__': __builtins__}
+        try:
+            with patch('mcpyghidra.server._build_rpc_globals', side_effect=_fake_build_globals):
+                _pyghidra_eval_sync(backend, '1', rpc_namespace=ns)
+            pg = scripting_mod._persistent_globals
+        finally:
+            scripting_mod._persistent_globals = saved
 
-        def _fake_exec(code, globs):
-            captured_persistent.append(dict(globs))
-            return None
-
-        with patch('mcpyghidra.tools.scripting._build_pyghidra_script') as mock_build:
-            mock_build.return_value = {}
-            with patch('mcpyghidra.tools.scripting._persistent_globals', None):
-                with patch('mcpyghidra.server._build_rpc_globals', side_effect=_fake_build_globals):
-                    result = _pyghidra_eval_sync(backend, '1', rpc_namespace=ns)
-
-        # The result should be successful (basic expression)
-        assert result.success is True
+        # After execution, the injected top-level keys must be gone.
+        assert pg is not None
+        assert 'my_callback' not in pg
+        assert 'mcp' not in pg
 
 
 # ---------------------------------------------------------------------------
@@ -1397,3 +1486,54 @@ class TestSnapshotIsolation:
 
         assert srv._rpc_update_deferred is False
         assert srv._script_executing is False
+
+
+# ---------------------------------------------------------------------------
+# TestInstallRpcPath
+# ---------------------------------------------------------------------------
+
+class TestInstallRpcPath:
+    """Tests for _install_rpc_path — pure nested-tree insertion."""
+
+    def _fn(self, tag: str):
+        return lambda: tag
+
+    def test_single_segment_is_flat_root(self):
+        roots: dict = {}
+        assert _install_rpc_path(roots, ['search_web'], self._fn('a')) is True
+        assert callable(roots['search_web'])
+
+    def test_nested_path_builds_namespaces(self):
+        roots: dict = {}
+        assert _install_rpc_path(roots, ['mcp', 'ghidra1', 'list'], self._fn('a')) is True
+        assert isinstance(roots['mcp'], ToolNamespace)
+        assert isinstance(roots['mcp'].ghidra1, ToolNamespace)
+        assert roots['mcp'].ghidra1.list() == 'a'
+
+    def test_multiple_paths_share_root(self):
+        roots: dict = {}
+        _install_rpc_path(roots, ['mcp', 'a', 'x'], self._fn('x'))
+        _install_rpc_path(roots, ['mcp', 'b', 'y'], self._fn('y'))
+        assert set(roots.keys()) == {'mcp'}
+        assert roots['mcp'].a.x() == 'x'
+        assert roots['mcp'].b.y() == 'y'
+
+    def test_leaf_then_namespace_conflict_returns_false(self):
+        roots: dict = {}
+        assert _install_rpc_path(roots, ['mcp', 'ghidra1'], self._fn('leaf')) is True
+        # 'mcp.ghidra1' is now a callable — nesting under it must fail
+        assert _install_rpc_path(roots, ['mcp', 'ghidra1', 'list'], self._fn('x')) is False
+        assert callable(roots['mcp'].ghidra1)
+
+    def test_namespace_then_leaf_conflict_returns_false(self):
+        roots: dict = {}
+        assert _install_rpc_path(roots, ['mcp', 'ghidra1', 'list'], self._fn('x')) is True
+        # 'mcp.ghidra1' is now a namespace — binding it as a leaf must fail
+        assert _install_rpc_path(roots, ['mcp', 'ghidra1'], self._fn('leaf')) is False
+        assert isinstance(roots['mcp'].ghidra1, ToolNamespace)
+
+    def test_duplicate_leaf_returns_false(self):
+        roots: dict = {}
+        assert _install_rpc_path(roots, ['mcp', 'x'], self._fn('first')) is True
+        assert _install_rpc_path(roots, ['mcp', 'x'], self._fn('second')) is False
+        assert roots['mcp'].x() == 'first'

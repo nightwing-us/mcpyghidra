@@ -3,7 +3,10 @@
 Implements:
 - Exception hierarchy (RPCError, RPCTimeoutError, RPCDisconnectedError)
 - CallbackScope: execution-scoped validity token
-- RPCNamespace: the 'rpc' object injected into scripting globals
+- project_name / ToolNamespace: project __-separated names into nested namespaces
+  (mcp__ghidra1__list -> mcp.ghidra1.list) in the scripting environment
+- RPCNamespace: internal discovery-state machinery (is_available() gates
+  injection; _definitions holds discovered definitions)
 - generate_callback_function: builds a callable from a FunctionDefinition
 - is_name_safe: name collision protection against Python builtins/keywords
 - map_exception: maps remote exception types to Python exceptions
@@ -13,6 +16,7 @@ from __future__ import annotations
 
 import builtins
 import keyword
+import re
 from typing import Any
 
 from mcpyghidra.rpc_types import FunctionDefinition
@@ -83,6 +87,10 @@ def is_name_safe(name: str, existing_globals: dict[str, Any] | None = None) -> b
     A name is unsafe if it:
     - Appears in the Python builtins / keyword denylist, or
     - Already exists in *existing_globals* (e.g. Ghidra scripting globals).
+
+    Importable-module shadowing is handled separately by the server's
+    ``_shadows_real_module`` (it needs the runtime import environment), since a
+    projected top-level root must not shadow a real module in the REPL.
     """
     if name in _PYTHON_DENYLIST:
         return False
@@ -106,16 +114,100 @@ _TYPE_MAP: dict[str, str] = {
 }
 
 
+def _schema_type_to_str(schema_type: Any) -> str:
+    """Map a JSON-Schema ``type`` to a Python type label.
+
+    JSON Schema permits ``type`` to be a *list* of type names (e.g.
+    ``['string', 'null']`` for a nullable field). A bare ``_TYPE_MAP.get()``
+    on that list raises ``TypeError: unhashable type: 'list'``, so accept both
+    the scalar and union forms here.
+    """
+    if isinstance(schema_type, list):
+        return ' | '.join(_TYPE_MAP.get(t, 'Any') for t in schema_type)
+    return _TYPE_MAP.get(schema_type, 'Any')
+
+
+# ---------------------------------------------------------------------------
+# Name projection (__ separators -> nested namespaces)
+# ---------------------------------------------------------------------------
+
+# Runs of two or more underscores act as a single namespace separator.
+_NS_SEPARATOR = re.compile(r'_{2,}')
+
+
+def project_name(raw: str) -> list[str] | None:
+    """Split an RPC function name into a namespace attribute path.
+
+    Runs of two or more underscores are namespace separators; leading,
+    trailing, and repeated separators collapse (empty segments are dropped).
+    A single underscore is preserved within a segment. Hard-keyword segments
+    are escaped with a leading underscore so they stay reachable via dotted
+    attribute access (``mcp.import`` is a SyntaxError; ``mcp._import`` is not).
+    Builtins and soft keywords are valid attribute names and left unescaped.
+
+    Args:
+        raw: The function name from ``mcpy/listFunctions`` (e.g.
+            ``mcp__ghidra1__list``).
+
+    Returns:
+        The list of path segments (e.g. ``['mcp', 'ghidra1', 'list']``), or
+        ``None`` if *raw* yields no segments (e.g. it was all underscores).
+    """
+    segments = [s for s in _NS_SEPARATOR.split(raw) if s]
+    if not segments:
+        return None
+    return ['_' + s if keyword.iskeyword(s) else s for s in segments]
+
+
+class ToolNamespace:
+    """A nested namespace of RPC callback functions.
+
+    Built when projecting ``__``-separated function names into the scripting
+    environment, so ``mcp__ghidra1__list`` is reachable as
+    ``mcp.ghidra1.list(...)``. Children (sub-namespaces or callables) are
+    looked up by attribute access; ``dir()`` and ``repr()`` enumerate them.
+
+    Children are stored in the ``_children`` dict and populated by the
+    server's tree builder; attribute access is resolved via ``__getattr__``
+    so escaped names (e.g. ``_import``) are reachable and private bookkeeping
+    attributes are never shadowed.
+    """
+
+    def __init__(self, path: str = '') -> None:
+        object.__setattr__(self, '_path', path)
+        object.__setattr__(self, '_children', {})
+
+    def __getattr__(self, name: str) -> Any:
+        # __getattr__ runs only when normal lookup fails, so _path/_children
+        # (set in __init__) and methods are never routed here.
+        children = object.__getattribute__(self, '_children')
+        if name in children:
+            return children[name]
+        label = object.__getattribute__(self, '_path') or '<rpc>'
+        raise AttributeError(f"'{label}' namespace has no attribute '{name}'")
+
+    def __dir__(self) -> list[str]:
+        return sorted(object.__getattribute__(self, '_children').keys())
+
+    def __repr__(self) -> str:
+        children = object.__getattribute__(self, '_children')
+        label = object.__getattribute__(self, '_path') or '<rpc>'
+        return f'<ToolNamespace {label}: {", ".join(sorted(children))}>'
+
+
 # ---------------------------------------------------------------------------
 # RPCNamespace
 # ---------------------------------------------------------------------------
 
 
 class RPCNamespace:
-    """The 'rpc' namespace object injected into scripting globals.
+    """Internal discovery-state machinery for RPC callbacks.
 
-    Provides discovery (available, help), testing (mock, is_available),
-    and attribute-based function access (rpc.search_web(...)).
+    No longer injected into script globals (callbacks now project into nested
+    ``ToolNamespace`` objects — see ``project_name`` / ``server._build_rpc_globals``).
+    Retained because ``is_available()`` gates injection and ``_definitions``
+    holds the discovered definitions. ``_mocks`` plumbing is kept for tests,
+    which inject mocks directly on the namespace.
     """
 
     def __init__(self) -> None:
@@ -143,7 +235,8 @@ class RPCNamespace:
         required = set(defn.inputSchema.get('required', []))
         for param_name in defn.parameterOrder:
             prop = props.get(param_name, {})
-            ptype = prop.get('type', 'any')
+            _pt = prop.get('type', 'any')
+            ptype = ' | '.join(_pt) if isinstance(_pt, list) else _pt
             desc = prop.get('description', '')
             default = prop.get('default')
             req_str = (
@@ -155,10 +248,6 @@ class RPCNamespace:
 
         if defn.returnDescription:
             print(f'Returns: {defn.returnDescription}')
-
-    def mock(self, name: str, handler: Any) -> None:
-        """Register a mock handler that bypasses the real RPC call for *name*."""
-        self._mocks[name] = handler
 
     def is_available(self) -> bool:
         """Return True if RPC callbacks are currently active."""
@@ -206,7 +295,7 @@ def _build_docstring(defn: FunctionDefinition, default_timeout: float) -> str:
     required = set(defn.inputSchema.get('required', []))
     for param_name in defn.parameterOrder:
         prop = props.get(param_name, {})
-        ptype = _TYPE_MAP.get(prop.get('type', ''), 'Any')
+        ptype = _schema_type_to_str(prop.get('type', ''))
         desc = prop.get('description', '')
         if param_name in required:
             lines.append(f'    {param_name} ({ptype}): {desc}')

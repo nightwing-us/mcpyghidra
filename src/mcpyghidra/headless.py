@@ -10,7 +10,7 @@ Usage:
 Prints JSON readiness signal to stdout when the server is ready:
     {"status": "ready", "host": "127.0.0.1", "port": 6050, "binary": "/path/to/elf"}
 
-This is the contract that test harnesses and wingman CLI rely on.
+This is the contract that test harnesses and MCP client CLIs rely on.
 
 Requires Ghidra 11.1+ (pyghidra was integrated starting ~11.1).
 MCPyGhidra targets Ghidra 11.x and 12.0+.
@@ -113,7 +113,7 @@ def main() -> None:
             'port': actual_port,
             'binary': str(binary_path),
         }
-        # JSON ready signal on stdout (parsed by tests and wingman)
+        # JSON ready signal on stdout (parsed by tests and MCP client CLIs)
         print(json.dumps(status), flush=True)
 
         import time

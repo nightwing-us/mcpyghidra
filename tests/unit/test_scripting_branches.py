@@ -258,6 +258,50 @@ class TestPyghidraEvalSyncPersistentGlobals:
         assert r2.success is True
         assert r2.result == '77'
 
+
+# ---------------------------------------------------------------------------
+# _pyghidra_eval_sync — re-entrancy / concurrency guard (single-flight)
+# ---------------------------------------------------------------------------
+
+
+class TestPyghidraEvalSyncReentrancyGuard:
+    """A second invocation while a script is executing fast-fails (no deadlock)."""
+
+    def test_reentrant_invocation_fast_fails_with_clear_error(self):
+        import mcpyghidra.tools.scripting as _scripting
+        from mcpyghidra.tools.scripting import _pyghidra_eval_sync
+
+        backend = _make_backend()
+        # Simulate a script already running by holding the single-flight lock.
+        acquired = _scripting._script_lock.acquire(blocking=False)
+        assert acquired
+        try:
+            res = _pyghidra_eval_sync(backend, '1 + 1')
+        finally:
+            _scripting._script_lock.release()
+
+        assert res.success is False
+        assert 're-entrant' in res.error and 'already executing' in res.error
+        # Must short-circuit BEFORE touching the backend / building globals.
+        backend.assert_not_called()
+
+    def test_lock_released_after_normal_execution(self):
+        """After a normal call the lock is free (a later call can acquire it)."""
+        import mcpyghidra.tools.scripting as _scripting
+        from mcpyghidra.tools.scripting import _pyghidra_eval_sync
+
+        backend = _make_backend()
+        fake_globals: dict = {'__builtins__': __builtins__}
+        _scripting._persistent_globals = None
+        with patch.object(_scripting, '_build_pyghidra_script', return_value=fake_globals):
+            with patched_mcpyghidra_server(_mock_server):
+                _pyghidra_eval_sync(backend, '1 + 1', reset=True)
+
+        # Lock must be free now.
+        got = _scripting._script_lock.acquire(blocking=False)
+        assert got
+        _scripting._script_lock.release()
+
     def test_reset_true_clears_then_runs(self):
         """reset=True forces re-initialisation of _persistent_globals."""
         import mcpyghidra.tools.scripting as _scripting

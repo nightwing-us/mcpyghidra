@@ -490,27 +490,74 @@ class TestRpcCallbacks:
 
         anyio.run(_test)
 
-    def test_rpc_namespace_available(self, headless_server: dict) -> None:
-        """rpc.available() returns the list of discovered function names."""
+    def test_flat_callback_discoverable_in_dir(self, headless_server: dict) -> None:
+        """A flat (no-__) callback is injected as a global, found via native dir()."""
 
         async def _test() -> None:
-            data = await _call_with_rpc(headless_server, 'rpc.available()')
+            data = await _call_with_rpc(headless_server, "'test_add' in dir()")
             assert data['success'] is True, f"Script failed: {data.get('error')}"
-            # result is the str() of the list, e.g. "['test_add']"
-            assert 'test_add' in data['result'], (
-                f"Expected 'test_add' in rpc.available(), got {data['result']!r}"
+            assert data['result'] == 'True', (
+                f"Expected 'test_add' in dir(), got {data['result']!r}"
             )
 
         anyio.run(_test)
 
-    def test_rpc_is_available(self, headless_server: dict) -> None:
-        """rpc.is_available() returns True when mcpy/rpcCallbacks is active."""
+    def test_callback_is_callable_when_active(self, headless_server: dict) -> None:
+        """When mcpy/rpcCallbacks is active, the discovered callback is callable."""
 
         async def _test() -> None:
-            data = await _call_with_rpc(headless_server, 'rpc.is_available()')
+            data = await _call_with_rpc(headless_server, 'callable(test_add)')
             assert data['success'] is True, f"Script failed: {data.get('error')}"
             assert data['result'] == 'True', (
-                f"Expected rpc.is_available() == True, got {data['result']!r}"
+                f"Expected callable(test_add) == True, got {data['result']!r}"
+            )
+
+        anyio.run(_test)
+
+    def test_namespaced_callback_projects_nested(self, headless_server: dict) -> None:
+        """A __-separated name is callable via nested namespace: mcp.demo.echo(...)."""
+
+        async def _test() -> None:
+            functions = [
+                FunctionDefinition(
+                    name='mcp__demo__echo',
+                    description='Echo the input string',
+                    parameterOrder=['msg'],
+                    inputSchema={
+                        'type': 'object',
+                        'properties': {'msg': {'type': 'string'}},
+                        'required': ['msg'],
+                    },
+                    returnDescription='the same message',
+                ),
+            ]
+
+            async def _handler(params: dict) -> CallFunctionResult:
+                if params.get('name') == 'mcp__demo__echo':
+                    return CallFunctionResult(content=params['arguments']['msg'])
+                raise ValueError(f"Unknown function: {params.get('name')}")
+
+            data = await _call_with_rpc(
+                headless_server,
+                "mcp.demo.echo('hi')",
+                functions=functions,
+                call_handler=_handler,
+            )
+            assert data['success'] is True, f"Script failed: {data.get('error')}"
+            assert data['result'] == 'hi', (
+                f"Expected nested call result 'hi', got {data['result']!r}"
+            )
+
+        anyio.run(_test)
+
+    def test_no_rpc_global_even_with_capability(self, headless_server: dict) -> None:
+        """The script-facing 'rpc' object is no longer injected (Decision 2)."""
+
+        async def _test() -> None:
+            data = await _call_with_rpc(headless_server, "'rpc' in dir()")
+            assert data['success'] is True, f"Script failed: {data.get('error')}"
+            assert data['result'] == 'False', (
+                f"Expected no 'rpc' global, got {data['result']!r}"
             )
 
         anyio.run(_test)
@@ -551,6 +598,39 @@ class TestRpcCallbacks:
             assert data['success'] is True, f"Script failed: {data.get('error')}"
             assert data['result'] == 'False', (
                 f"Expected 'rpc' not in globals, got result={data['result']!r}"
+            )
+
+        anyio.run(_test)
+
+    def test_mcp_self_namespace_always_present(self, headless_server: dict) -> None:
+        """mcp.self.* is injected even for a standard (no-capability) client."""
+
+        async def _test() -> None:
+            data = await _call_standard(
+                headless_server, "'self' in dir(mcp) and callable(mcp.self.decompile)"
+            )
+            assert data['success'] is True, f"Script failed: {data.get('error')}"
+            assert data['result'] == 'True', (
+                f"Expected mcp.self present, got result={data['result']!r}"
+            )
+
+        anyio.run(_test)
+
+    def test_mcp_self_in_process_tool_call(self, headless_server: dict) -> None:
+        """A script calls this server's own tool in-process via mcp.self.* (no RPC).
+
+        This is the deadlock-free self-dispatch path: the script runs on the
+        dedicated script limiter and bridges to the tool handler in-process
+        rather than reverse-RPC'ing back to the client.
+        """
+
+        async def _test() -> None:
+            # decompile main IN-PROCESS through mcp.self and read the resolved name.
+            code = "mcp.self.decompile([{'name': 'main'}])[0]['name']"
+            data = await _call_standard(headless_server, code)
+            assert data['success'] is True, f"Script failed: {data.get('error')}"
+            assert data['result'] == 'main', (
+                f"Expected in-process decompile of 'main', got {data['result']!r}"
             )
 
         anyio.run(_test)
