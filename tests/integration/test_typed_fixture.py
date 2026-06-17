@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import TYPED_FIXTURE_ELF
-from tests.integration.helpers import run_async
+from tests.integration.helpers import open_analyzed_program, run_async
 
 
 # ---------------------------------------------------------------------------
@@ -22,14 +22,15 @@ from tests.integration.helpers import run_async
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope='session')
-def typed_program():
+def typed_program(tmp_path_factory):
     """Load typed_fixture.elf once for all typed-fixture integration tests."""
     pyghidra = pytest.importorskip('pyghidra')
     # Start the JVM if not already running (safe to call multiple times).
     pyghidra.start()
 
-    with pyghidra.open_program(TYPED_FIXTURE_ELF, analyze=True) as flat_api:
-        yield flat_api.getCurrentProgram()
+    project_dir = str(tmp_path_factory.mktemp('ghidra_proj'))
+    with open_analyzed_program(pyghidra, TYPED_FIXTURE_ELF, project_dir) as program:
+        yield program
 
 
 @pytest.fixture(scope='session')

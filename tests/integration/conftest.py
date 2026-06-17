@@ -4,16 +4,18 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import CRACKME_ELF
+from tests.integration.helpers import open_analyzed_program
 
 
 @pytest.fixture(scope='session')
-def ghidra_program():
+def ghidra_program(tmp_path_factory):
     """Load crackme.elf once for all integration tests."""
     pyghidra = pytest.importorskip('pyghidra')
     pyghidra.start()
 
-    with pyghidra.open_program(CRACKME_ELF, analyze=True) as flat_api:
-        yield flat_api.getCurrentProgram()
+    project_dir = str(tmp_path_factory.mktemp('ghidra_proj'))
+    with open_analyzed_program(pyghidra, CRACKME_ELF, project_dir) as program:
+        yield program
 
 
 @pytest.fixture(scope='session')

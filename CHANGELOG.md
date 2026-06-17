@@ -6,6 +6,32 @@ format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-17
+
+Headless-server improvements: persistent, reusable Ghidra projects and reliable
+saving of analysis and edits on shutdown.
+
+### Added
+
+- **Persistent Ghidra projects for the headless server via `--project-dir` and
+  `--project-name`.** Point the launcher at a project directory to reuse prior
+  analysis and keep your edits (renames, comments, types) across runs. When
+  omitted, an auto-named project is created beside the binary as before.
+
+### Changed
+
+- **The headless launcher now uses pyghidra's current project API** instead of
+  the deprecated `open_program`, removing the associated deprecation warning.
+  Projects are created in the standard standalone Ghidra layout, so a
+  `--project-dir` opens directly in the Ghidra GUI.
+
+### Fixed
+
+- **Analysis and edits are now persisted when the headless server is stopped by
+  a signal (SIGTERM/SIGINT).** Previously the embedded JVM intercepted the
+  signal and terminated before the project was saved, discarding changes; the
+  launcher now shuts down gracefully and saves the project first.
+
 ## [0.7.0] — 2026-06-12
 
 Ergonomics and reliability improvements for the `pyghidra` code-execution tool,
@@ -66,6 +92,7 @@ globals and are unaffected.
 
 First public release.
 
-[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightwing-us/mcpyghidra/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nightwing-us/mcpyghidra/releases/tag/v0.6.0

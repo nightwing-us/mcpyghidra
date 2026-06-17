@@ -27,6 +27,67 @@ import sys
 from pathlib import Path
 
 
+def _resolve_project(
+    project_dir: str | None,
+    project_name: str | None,
+    binary_path: Path,
+) -> tuple[str, str, str]:
+    """Resolve project location/name and the program's in-project path.
+
+    ``pyghidra.open_project(parent, name)`` creates a standalone (non-nested)
+    project at ``<parent>/<name>`` — the same layout the Ghidra GUI uses, so a
+    project reopens cleanly on a subsequent launch. With no ``--project-dir`` we
+    mirror the legacy ``open_program`` default: an auto-named ``<binary>_ghidra``
+    project beside the binary.
+
+    Returns ``(project_parent, project_name, program_path)``. The program is
+    imported at the project root under its file name, so its project path is
+    ``/<binary filename>``.
+    """
+    project_parent = project_dir or str(binary_path.parent)
+    name = project_name or f'{binary_path.stem}_ghidra'
+    program_path = '/' + binary_path.name
+    return project_parent, name, program_path
+
+
+def _run_server(program, host: str, port: int, binary_path: Path) -> None:
+    """Start the MCP server for an opened program and block until interrupted.
+
+    Returns when interrupted (SIGTERM/SIGINT -> KeyboardInterrupt) so the caller
+    can persist the program on the way out.
+    """
+    import time
+
+    print(f'Starting MCP server on {host}:{port}...', file=sys.stderr)
+    server = _create_server(program, host, port)
+
+    # Verify port was actually assigned (required when --port 0 is used)
+    actual_port = server['port']
+    if actual_port is None or actual_port <= 0:
+        print(
+            f'Error: server port not assigned correctly (got {actual_port!r})',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    status = {
+        'status': 'ready',
+        'host': host,
+        'port': actual_port,
+        'binary': str(binary_path),
+    }
+    # JSON ready signal on stdout (parsed by tests and MCP client CLIs)
+    print(json.dumps(status), flush=True)
+
+    try:
+        # Block until interrupted
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print('Shutting down...', file=sys.stderr)
+        server['stop']()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='MCPyGhidra headless MCP server',
@@ -46,6 +107,17 @@ def main() -> None:
         type=int,
         default=6050,
         help='Port for MCP server (default: 6050, 0 for auto-assign)',
+    )
+    parser.add_argument(
+        '--project-dir',
+        default=None,
+        help='Directory for the Ghidra project. Default: an auto-named project '
+        '"<binary>_ghidra" beside the binary (still persisted on graceful exit).',
+    )
+    parser.add_argument(
+        '--project-name',
+        default=None,
+        help='Name of the Ghidra project (default: derived from the binary).',
     )
     args = parser.parse_args()
 
@@ -72,11 +144,29 @@ def main() -> None:
         sys.exit(1)
 
     # Late imports — pyghidra starts the JVM
+    import signal as _signal
+
     import pyghidra
+    from pyghidra.launcher import HeadlessPyGhidraLauncher
+
+    # Persist analysis/edits on shutdown. By default the JVM grabs SIGINT/SIGTERM
+    # and hard-terminates the process, which SKIPS our `finally: program.save()`
+    # below — so changes are lost on any signal-based stop. Launch with -Xrs so
+    # the JVM leaves signals to Python, and convert SIGTERM into KeyboardInterrupt
+    # so SIGTERM (the signal a process supervisor sends to stop a background
+    # task) unwinds the `with` blocks and the program is saved.
+    # Empirically validated on Ghidra 12.0.4 + pyghidra 3.0.2/3.1.0: a function
+    # rename survives SIGTERM with this change; without it the rename is lost.
+    def _on_sigterm(signum, frame):  # noqa: ANN001, ARG001
+        raise KeyboardInterrupt
+
+    _signal.signal(_signal.SIGTERM, _on_sigterm)
 
     print('Starting Ghidra headless...', file=sys.stderr)
     try:
-        pyghidra.start()
+        _launcher = HeadlessPyGhidraLauncher()
+        _launcher.add_vmargs('-Xrs')
+        _launcher.start()
     except Exception as e:
         print(
             f'Error: Failed to start Ghidra headless: {e}\n'
@@ -88,43 +178,42 @@ def main() -> None:
         sys.exit(1)
 
     print(f'Opening and analyzing {binary_path.name}...', file=sys.stderr)
-    # Use open_program (the known-working API). It is deprecated but functional.
-    # open_program yields a FlatProgramAPI context manager.
-    # When testing with a newer Ghidra version that has open_project/program_context/analyze,
-    # consider switching to the modern API and removing this note.
-    with pyghidra.open_program(str(binary_path), analyze=True) as flat_api:
-        program = flat_api.getCurrentProgram()
+    from ghidra.program.util import GhidraProgramUtilities
 
-        print(f'Starting MCP server on {args.host}:{args.port}...', file=sys.stderr)
-        server = _create_server(program, args.host, args.port)
-
-        # Verify port was actually assigned (required when --port 0 is used)
-        actual_port = server['port']
-        if actual_port is None or actual_port <= 0:
-            print(
-                f'Error: server port not assigned correctly (got {actual_port!r})',
-                file=sys.stderr,
+    project_parent, project_name, program_path = _resolve_project(
+        args.project_dir,
+        args.project_name,
+        binary_path,
+    )
+    # Modern pyghidra API (open_program is deprecated). open_project +
+    # program_loader (first run: import) / program_context (reopen) gives us
+    # explicit control over the save, which the signal handling above relies on.
+    with pyghidra.open_project(project_parent, project_name, create=True) as project:
+        # First launch imports the binary into the project; later launches reopen
+        # the existing program so prior analysis and edits are preserved.
+        if project.getProjectData().getFile(program_path) is None:
+            loader = (
+                pyghidra
+                .program_loader()
+                .project(project)
+                .source(str(binary_path))
+                .name(binary_path.name)
+                .projectFolderPath('/')
             )
-            sys.exit(1)
+            with loader.load() as load_results:
+                load_results.save(pyghidra.task_monitor())
 
-        status = {
-            'status': 'ready',
-            'host': args.host,
-            'port': actual_port,
-            'binary': str(binary_path),
-        }
-        # JSON ready signal on stdout (parsed by tests and MCP client CLIs)
-        print(json.dumps(status), flush=True)
-
-        import time
-
-        try:
-            # Block until interrupted
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print('Shutting down...', file=sys.stderr)
-            server['stop']()
+        with pyghidra.program_context(project, program_path) as program:
+            # analyze() always re-analyzes; only run it when the program has not
+            # been analyzed yet (fresh import) so reopens stay fast and keep edits.
+            if GhidraProgramUtilities.shouldAskToAnalyze(program):
+                pyghidra.analyze(program)
+            try:
+                _run_server(program, args.host, args.port, binary_path)
+            finally:
+                # We own the save now (open_program used to do it). This runs on
+                # the SIGTERM->KeyboardInterrupt unwind, persisting to the project.
+                program.save('MCPyGhidra session', pyghidra.task_monitor())
 
 
 def _create_server(program, host: str, port: int) -> dict:

@@ -52,7 +52,12 @@ dmypy.json
 hs_err_pid*.log
 
 src/mcpyghidra/_version.py
+# Ghidra projects created beside test binaries: nested (legacy open_program)
+# and standalone (modern open_project) layouts.
 tests/fixtures/*_ghidra/
+tests/fixtures/*_ghidra.gpr
+tests/fixtures/*_ghidra.rep/
+tests/fixtures/*_ghidra.lock
 
 # coverage JSON exports (not matched by coverage.xml / *.cover above)
 coverage.json

@@ -1,5 +1,8 @@
 """E2E test fixtures — launches headless server as subprocess."""
+import glob
 import json
+import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -10,6 +13,25 @@ import pytest
 from tests.conftest import CRACKME_ELF, STRUCT_TEST_ELF
 
 LAUNCH_TIMEOUT = 180  # seconds — Ghidra analysis can be slow
+
+
+def _clean_project_artifacts(binary_path: str) -> None:
+    """Remove stale Ghidra project files left beside a test binary.
+
+    Covers both the nested ``<name>_ghidra/`` layout (legacy open_program) and
+    the standalone ``<name>_ghidra.gpr`` / ``.rep/`` / ``.lock`` layout that the
+    modern open_project API produces.
+    """
+    base = os.path.dirname(binary_path)
+    matches = glob.glob(os.path.join(base, '*_ghidra')) + glob.glob(os.path.join(base, '*_ghidra.*'))
+    for path in matches:
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def _wait_for_ready(proc: subprocess.Popen, timeout: float) -> dict:
@@ -77,10 +99,7 @@ def headless_server(request):
         )
 
     # Clean stale Ghidra project files before launching
-    import glob
-    import shutil
-    for d in glob.glob(os.path.join(os.path.dirname(CRACKME_ELF), '*_ghidra')):
-        shutil.rmtree(d, ignore_errors=True)
+    _clean_project_artifacts(CRACKME_ELF)
 
     # Wrap with `coverage run -p` when MCPYGHIDRA_COVERAGE_SUBPROCESS=1 so
     # the headless subprocess contributes to combined coverage reports.
@@ -132,10 +151,7 @@ def fresh_headless_server(request):
         pytest.skip('Ghidra/pyghidra not available')
 
     # Clean stale Ghidra project files for a fresh analysis
-    import glob
-    import shutil
-    for d in glob.glob(os.path.join(os.path.dirname(CRACKME_ELF), '*_ghidra')):
-        shutil.rmtree(d, ignore_errors=True)
+    _clean_project_artifacts(CRACKME_ELF)
 
     cmd = [sys.executable, '-m', 'mcpyghidra.headless']
     if os.environ.get('MCPYGHIDRA_COVERAGE_SUBPROCESS') == '1':
@@ -158,8 +174,7 @@ def fresh_headless_server(request):
             proc.kill()
             proc.wait()
         # Clean up after ourselves
-        for d in glob.glob(os.path.join(os.path.dirname(CRACKME_ELF), '*_ghidra')):
-            shutil.rmtree(d, ignore_errors=True)
+        _clean_project_artifacts(CRACKME_ELF)
 
 
 @pytest.fixture(scope='class')
@@ -185,10 +200,7 @@ def struct_test_server(request):
         pytest.skip('Ghidra/pyghidra not available')
 
     # Clean stale Ghidra project files for struct_test.elf
-    import glob
-    import shutil
-    for d in glob.glob(os.path.join(os.path.dirname(STRUCT_TEST_ELF), '*_ghidra')):
-        shutil.rmtree(d, ignore_errors=True)
+    _clean_project_artifacts(STRUCT_TEST_ELF)
 
     proc = subprocess.Popen(
         [sys.executable, '-m', 'mcpyghidra.headless',
@@ -209,5 +221,4 @@ def struct_test_server(request):
             proc.kill()
             proc.wait()
         # Clean up Ghidra project files for struct_test.elf
-        for d in glob.glob(os.path.join(os.path.dirname(STRUCT_TEST_ELF), '*_ghidra')):
-            shutil.rmtree(d, ignore_errors=True)
+        _clean_project_artifacts(STRUCT_TEST_ELF)

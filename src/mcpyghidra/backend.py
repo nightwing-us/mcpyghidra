@@ -145,7 +145,7 @@ class GhidraBackend(ABC):
 class HeadlessBackend(GhidraBackend):
     """Backend for headless mode (pyghidra, no GUI).
 
-    Constructed with a Program object from pyghidra.open_program().
+    Constructed with a Program object opened via pyghidra.program_context().
 
     Requires Ghidra 11.1+ (pyghidra was integrated into Ghidra starting ~11.1).
     """
