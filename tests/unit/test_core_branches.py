@@ -686,16 +686,16 @@ class TestContextSyncFallbacks:
 
 
 # ---------------------------------------------------------------------------
-# _get_funcs_sync — hex-like string detection (address vs name disambiguation)
+# _funcs_sync — hex-like string detection (address vs name disambiguation)
 # ---------------------------------------------------------------------------
 
 
-class TestGetFuncsSyncAddressDetection:
-    """_get_funcs_sync address detection: pure hex digits treated as address."""
+class TestFuncsSyncAddressDetection:
+    """_funcs_sync address detection: pure hex digits treated as address."""
 
     def test_pure_hex_digits_treated_as_address(self):
         """'deadbeef' (all hex chars, no 0x prefix) → looked up as address."""
-        from mcpyghidra.tools.core import _get_funcs_sync
+        from mcpyghidra.tools.core import _funcs_sync
 
         backend = _make_backend()
         mock_addr = MagicMock()
@@ -704,7 +704,7 @@ class TestGetFuncsSyncAddressDetection:
         # Function not found at that address
         backend.program.getFunctionManager.return_value.getFunctionContaining.return_value = None
 
-        results = _get_funcs_sync(backend, ['deadbeef'])
+        results = _funcs_sync(backend, ['deadbeef'])
         assert len(results) == 1
         assert 'error' in results[0]
         # Confirm the error mentions an address, not a name
@@ -712,19 +712,19 @@ class TestGetFuncsSyncAddressDetection:
 
     def test_non_hex_string_treated_as_name(self):
         """'main' (not all hex chars) → looked up by name."""
-        from mcpyghidra.tools.core import _get_funcs_sync
+        from mcpyghidra.tools.core import _funcs_sync
 
         backend = _make_backend()
         backend.flat_api.getFunction.return_value = None
 
-        results = _get_funcs_sync(backend, ['main'])
+        results = _funcs_sync(backend, ['main'])
         assert len(results) == 1
         assert 'error' in results[0]
         assert 'name' in results[0]['error'].lower()
 
     def test_0x_prefix_treated_as_address(self):
         """'0x1234' (starts with 0x) → looked up as address."""
-        from mcpyghidra.tools.core import _get_funcs_sync
+        from mcpyghidra.tools.core import _funcs_sync
 
         backend = _make_backend()
         mock_addr = MagicMock()
@@ -732,14 +732,14 @@ class TestGetFuncsSyncAddressDetection:
         backend.program.getAddressFactory.return_value.getAddress.return_value = mock_addr
         backend.program.getFunctionManager.return_value.getFunctionContaining.return_value = None
 
-        results = _get_funcs_sync(backend, ['0x1234'])
+        results = _funcs_sync(backend, ['0x1234'])
         assert len(results) == 1
         assert 'error' in results[0]
         assert 'address' in results[0]['error'].lower()
 
     def test_successful_function_lookup_by_name(self):
         """Name lookup succeeds → result dict has name, entrypoint, signature, error=None."""
-        from mcpyghidra.tools.core import _get_funcs_sync
+        from mcpyghidra.tools.core import _funcs_sync
 
         backend = _make_backend()
         mock_func = MagicMock()
@@ -751,7 +751,7 @@ class TestGetFuncsSyncAddressDetection:
         mock_dec.signature = 'void my_func()'
         backend.get_decompiled_func.return_value = mock_dec
 
-        results = _get_funcs_sync(backend, ['my_func'])
+        results = _funcs_sync(backend, ['my_func'])
         assert len(results) == 1
         assert results[0]['error'] is None
         assert results[0]['name'] == 'my_func'
@@ -1268,14 +1268,14 @@ class TestAsyncWrappers:
         result = _run_async(cursor, backend)
         assert result.addr == '0x400000'
 
-    def test_get_funcs_single_string_coerced_to_list(self):
-        """get_funcs() normalises a non-list items arg to a list."""
-        from mcpyghidra.tools.core import get_funcs
+    def test_funcs_single_string_coerced_to_list(self):
+        """funcs() normalises a non-list items arg to a list."""
+        from mcpyghidra.tools.core import funcs
 
         backend = _make_backend()
         backend.flat_api.getFunction.return_value = None
 
         # Passing a plain string (not a list) exercises the `if not isinstance(items, list)` branch
-        results = _run_async(get_funcs, backend, 'not_a_list')  # type: ignore[arg-type]
+        results = _run_async(funcs, backend, 'not_a_list')  # type: ignore[arg-type]
         assert isinstance(results, list)
         assert len(results) == 1

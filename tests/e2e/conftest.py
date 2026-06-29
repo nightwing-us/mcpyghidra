@@ -109,7 +109,7 @@ def headless_server(request):
         cmd = [sys.executable, '-m', 'coverage', 'run', '-p', '-m', 'mcpyghidra.headless']
     proc = subprocess.Popen(
         cmd + [
-            '--binary', CRACKME_ELF,
+            CRACKME_ELF,
             '--port', '0',  # auto-assign port
         ],
         stdout=subprocess.PIPE,
@@ -157,7 +157,7 @@ def fresh_headless_server(request):
     if os.environ.get('MCPYGHIDRA_COVERAGE_SUBPROCESS') == '1':
         cmd = [sys.executable, '-m', 'coverage', 'run', '-p', '-m', 'mcpyghidra.headless']
     proc = subprocess.Popen(
-        cmd + ['--binary', CRACKME_ELF, '--port', '0'],
+        cmd + [CRACKME_ELF, '--port', '0'],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
@@ -204,7 +204,7 @@ def struct_test_server(request):
 
     proc = subprocess.Popen(
         [sys.executable, '-m', 'mcpyghidra.headless',
-         '--binary', STRUCT_TEST_ELF, '--port', '0'],
+         STRUCT_TEST_ELF, '--port', '0'],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,

@@ -1,4 +1,4 @@
-"""Type tools: types, type_info, create_struct, add_field.
+"""Type tools: type_info, list_types_result, create_struct, add_field.
 
 All functions take ``backend: GhidraBackend`` as their first argument.
 These are standalone functions — no class needed — registered via the
@@ -23,7 +23,7 @@ from mcpyghidra.models import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from mcpyghidra.models import ListResult
 
 
 # ---------------------------------------------------------------------------
@@ -283,43 +283,14 @@ def _resolve_field_type(field_type_str: str, dtm: Any, type_map: dict) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def types(
-    backend: GhidraBackend,
-    pattern: str | None = None,
-    offset: int = 0,
-    limit: int = 500,
-) -> list[TypeSummary]:
-    """Enumerate and search available types across all type sources. Paginated (not batched).
-
-    RETURNS: list[TypeSummary] with name, full_path, type_string, kind, size
-
-    PARAMETERS:
-    - pattern: Substring filter (case-insensitive, strips * characters)
-    - offset: Starting index for pagination (default 0)
-    - limit: Maximum number of results (default 500)
-
-    USE CASE: Discover available types before setting variable types.
-
-    EXAMPLE:
-    - types() -> first 500 types
-    - types(pattern="stream", limit=100) -> search for stream-related types
-    - types(offset=50, limit=50) -> next page of results"""
-    if offset < 0:
-        raise ToolError('offset must be non-negative')
-    if limit <= 0:
-        raise ToolError('limit must be positive')
-    return await anyio.to_thread.run_sync(
-        lambda: _types_sync(backend, pattern, offset, limit)
-    )
-
-
-def _types_sync(
+def _iter_type_summaries(
     backend: GhidraBackend,
     pattern: str | None,
-    offset: int,
-    limit: int,
 ) -> list[TypeSummary]:
-    """Sync implementation — runs in thread pool."""
+    """Enumerate all types, optionally filtered by pattern (case-insensitive substring).
+
+    Strips leading/trailing * from pattern (glob-style callers). Returns sorted list.
+    """
     if pattern:
         pattern = pattern.strip('*')
 
@@ -343,10 +314,31 @@ def _types_sync(
             results.append(_get_type_summary(data_type))
 
     results.sort(key=lambda s: s.name.lower())
+    return results
 
-    total = len(results)
-    end = min(offset + limit, total)
-    return results[offset:end]
+
+def list_types_result(
+    backend: GhidraBackend,
+    offset: int,
+    limit: int,
+    match_filter: str = '',
+) -> 'ListResult':
+    """Enumerate types as a paginated ListResult (backs list(entry_type='type'))."""
+    from mcpyghidra.tools.core import _tool_result_list_formatter
+
+    summaries = _iter_type_summaries(backend, match_filter or None)
+
+    def proc(ts: 'TypeSummary') -> dict:
+        return {
+            'type': 'type',
+            'name': ts.name,
+            'full_path': ts.full_path,
+            'type_string': ts.type_string,
+            'kind': ts.kind,
+            'size': ts.size,
+        }
+
+    return _tool_result_list_formatter('types', 'type', proc, summaries, offset, limit)
 
 
 async def type_info(

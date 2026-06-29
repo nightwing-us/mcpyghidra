@@ -49,7 +49,7 @@ def _launch(project_dir, project_name: str) -> subprocess.Popen:
         cmd = [sys.executable, '-m', 'coverage', 'run', '-p', '-m', 'mcpyghidra.headless']
     return subprocess.Popen(
         cmd + [
-            '--binary', CRACKME_ELF,
+            CRACKME_ELF,
             '--port', '0',
             '--project-dir', str(project_dir),
             '--project-name', project_name,

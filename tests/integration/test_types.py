@@ -1,4 +1,4 @@
-"""Integration tests for type tools: types, type_info, create_struct, add_field.
+"""Integration tests for type tools: list(entry_type='type'), type_info, create_struct, add_field.
 
 Tests call tool functions directly on the HeadlessBackend instance. Struct creation
 tests use unique names to avoid collisions.
@@ -6,7 +6,8 @@ tests use unique names to avoid collisions.
 from __future__ import annotations
 
 
-from mcpyghidra.tools.types import add_field, create_struct, type_info, types
+from mcpyghidra.tools.core import list_entries
+from mcpyghidra.tools.types import add_field, create_struct, type_info
 from tests.integration.helpers import assert_non_empty, run_async
 
 
@@ -16,73 +17,74 @@ _TEST_STRUCT_FIELD_NAME = 'McpTestRect_Integration'
 
 
 class TestListTypes:
-    """types(backend, ...) — enumerate types with and without pattern filter."""
+    """list_entries(backend, entry_type='type', ...) — enumerate types via ListResult API."""
 
     def test_list_types_no_filter_returns_results(self, backend):
-        """Without filter, types() should return a non-empty list."""
-        result = run_async(types, backend)
-        assert isinstance(result, list)
-        assert len(result) > 0, 'Expected at least one type from types()'
+        """Without filter, list(entry_type='type') should return a non-empty ListResult."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=500)
+        assert hasattr(result, 'page_info'), 'Expected ListResult with page_info'
+        assert result.entry_type == 'type'
+        assert len(result.items) > 0, 'Expected at least one type item'
 
-    def test_list_types_items_are_type_summaries(self, backend):
-        """Each item should be a TypeSummary with expected fields."""
-        result = run_async(types, backend, limit=10)
-        assert len(result) > 0
-        for item in result:
-            assert hasattr(item, 'name'), f'TypeSummary missing "name": {item!r}'
-            assert hasattr(item, 'full_path'), f'TypeSummary missing "full_path": {item!r}'
-            assert hasattr(item, 'type_string'), f'TypeSummary missing "type_string": {item!r}'
-            assert hasattr(item, 'kind'), f'TypeSummary missing "kind": {item!r}'
-            assert isinstance(item.name, str)
-            assert_non_empty(item.name)
+    def test_list_types_items_have_expected_fields(self, backend):
+        """Each item dict should have the expected type fields."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=10)
+        assert len(result.items) > 0
+        for item in result.items:
+            assert 'name' in item, f'Item missing "name": {item!r}'
+            assert 'full_path' in item, f'Item missing "full_path": {item!r}'
+            assert 'type_string' in item, f'Item missing "type_string": {item!r}'
+            assert 'kind' in item, f'Item missing "kind": {item!r}'
+            assert isinstance(item['name'], str)
+            assert_non_empty(item['name'])
 
-    def test_list_types_with_pattern_int(self, backend):
-        """Pattern 'int' should return types containing 'int'."""
-        result = run_async(types, backend, pattern='int', limit=100)
-        assert isinstance(result, list)
-        assert len(result) > 0, 'Expected types matching "int" pattern'
-        for item in result:
-            assert 'int' in item.name.lower() or 'int' in item.full_path.lower(), (
-                f'Type "{item.name}" does not match pattern "int": full_path={item.full_path!r}'
+    def test_list_types_with_match_filter_int(self, backend):
+        """match_filter 'int' should return types containing 'int'."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=100,
+                           match_filter='int')
+        assert len(result.items) > 0, 'Expected types matching "int" filter'
+        for item in result.items:
+            assert 'int' in item['name'].lower() or 'int' in item['full_path'].lower(), (
+                f'Type "{item["name"]}" does not match filter "int": full_path={item["full_path"]!r}'
             )
 
-    def test_list_types_with_pattern_char(self, backend):
-        """Pattern 'char' should return char-related types."""
-        result = run_async(types, backend, pattern='char', limit=50)
-        assert isinstance(result, list)
-        assert len(result) > 0, 'Expected types matching "char" pattern'
+    def test_list_types_with_match_filter_char(self, backend):
+        """match_filter 'char' should return char-related types."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=50,
+                           match_filter='char')
+        assert len(result.items) > 0, 'Expected types matching "char" filter'
 
     def test_list_types_pagination_offset(self, backend):
         """Two pages with different offsets should not be identical."""
-        page1 = run_async(types, backend, offset=0, limit=5)
-        page2 = run_async(types, backend, offset=5, limit=5)
+        page1 = run_async(list_entries, backend, entry_type='type', offset=0, limit=5)
+        page2 = run_async(list_entries, backend, entry_type='type', offset=5, limit=5)
 
-        if len(page1) == 5 and len(page2) > 0:
-            names_p1 = {item.name for item in page1}
-            names_p2 = {item.name for item in page2}
+        if page1.page_info.num_returned == 5 and page2.page_info.num_returned > 0:
+            names_p1 = {item['name'] for item in page1.items}
+            names_p2 = {item['name'] for item in page2.items}
             assert names_p1 != names_p2, (
                 'Pages at offset=0 and offset=5 should return different types'
             )
 
     def test_list_types_limit_respected(self, backend):
-        """Returned list length should not exceed limit."""
-        result = run_async(types, backend, limit=3)
-        assert len(result) <= 3, (
-            f'Expected at most 3 results with limit=3, got {len(result)}'
+        """Returned item count should not exceed limit."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=3)
+        assert len(result.items) <= 3, (
+            f'Expected at most 3 results with limit=3, got {len(result.items)}'
         )
 
     def test_list_types_glob_pattern_stripped(self, backend):
-        """Pattern with glob asterisks should work (asterisks are stripped)."""
-        result = run_async(types, backend, pattern='*int*', limit=50)
-        assert isinstance(result, list)
-        assert len(result) > 0, 'Expected results for glob pattern "*int*"'
+        """match_filter with glob asterisks should work (asterisks are stripped)."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=50,
+                           match_filter='*int*')
+        assert len(result.items) > 0, 'Expected results for glob filter "*int*"'
 
     def test_list_types_nonexistent_pattern_returns_empty(self, backend):
-        """A pattern that matches nothing should return an empty list."""
-        result = run_async(types, backend, pattern='xyzzy_nonexistent_type_12345')
-        assert isinstance(result, list)
-        assert len(result) == 0, (
-            f'Expected empty list for nonexistent pattern, got: {[i.name for i in result]}'
+        """A filter that matches nothing should return empty items list."""
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=500,
+                           match_filter='xyzzy_nonexistent_type_12345')
+        assert len(result.items) == 0, (
+            f'Expected empty items for nonexistent filter, got: {[i["name"] for i in result.items]}'
         )
 
 
@@ -205,13 +207,14 @@ class TestCreateStruct:
         )
 
     def test_create_struct_visible_in_types(self, backend):
-        """After creation, the struct should appear in types() with pattern filter."""
+        """After creation, the struct should appear in list(entry_type='type') with match_filter."""
         run_async(create_struct, backend, name=_TEST_STRUCT_NAME, size=8)
 
-        result = run_async(types, backend, pattern=_TEST_STRUCT_NAME)
-        names = [item.name for item in result]
+        result = run_async(list_entries, backend, entry_type='type', offset=0, limit=500,
+                           match_filter=_TEST_STRUCT_NAME)
+        names = [item['name'] for item in result.items]
         assert _TEST_STRUCT_NAME in names, (
-            f'Expected {_TEST_STRUCT_NAME!r} in types() results, got: {names}'
+            f'Expected {_TEST_STRUCT_NAME!r} in list(type) results, got: {names}'
         )
 
     def test_create_struct_duplicate_returns_existing(self, backend):
@@ -335,3 +338,28 @@ class TestAddField:
             'comment': 'reserved for future use',
         }])[0]
         assert isinstance(result['success'], bool)
+
+
+# ---------------------------------------------------------------------------
+# list(entry_type='type') — new ListResult-based API
+# ---------------------------------------------------------------------------
+
+
+def test_list_entry_type_type_returns_listresult(typed_backend):
+    from mcpyghidra.tools.core import list_entries
+    from tests.integration.helpers import run_async
+    result = run_async(list_entries, typed_backend, entry_type='type', offset=0, limit=500)
+    # ListResult envelope, not a bare list:
+    assert hasattr(result, 'page_info')
+    assert result.entry_type == 'type'
+    names = [item['name'] for item in result.items]
+    assert any('Point' in n for n in names), f'expected Point-ish type, got {names[:20]}'
+
+
+def test_list_entry_type_type_match_filter(typed_backend):
+    from mcpyghidra.tools.core import list_entries
+    from tests.integration.helpers import run_async
+    result = run_async(list_entries, typed_backend, entry_type='type', offset=0, limit=500,
+                       match_filter='Point')
+    assert all('point' in item['name'].lower() or 'point' in item.get('full_path', '').lower()
+               for item in result.items)

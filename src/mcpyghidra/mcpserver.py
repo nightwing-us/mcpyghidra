@@ -2,7 +2,6 @@ from __future__ import annotations
 
 # Standard Libraries
 import socket
-import struct
 import sys
 from datetime import (
     datetime,
@@ -51,6 +50,11 @@ def _Msg():
     return Msg
 
 
+PORT_SPAN = (
+    10  # GUI: ports [port_start, port_start + PORT_SPAN - 1] -> default 6050-6059
+)
+
+
 class MCPPortManager:
     """Manages ephemeral port assignments for MCP servers in GUI mode.
 
@@ -76,6 +80,7 @@ class MCPPortManager:
         self._plugin = plugin
         self._program_path_to_port: dict[str, int] = {}
         self._port_start = port_start
+        self._port_end = port_start + PORT_SPAN - 1
 
     @classmethod
     def get_port_by_path(cls, program_path: str) -> int | None:
@@ -84,26 +89,28 @@ class MCPPortManager:
             return None
         return cls._instance._program_path_to_port.get(program_path)
 
-    def assign_port(self, program: 'ProgramDB') -> int:
-        """Assign the next available port to a program.
+    def used_ports(self) -> set[int]:
+        return set(self._program_path_to_port.values())
 
-        If the program already has a port assigned this session, return it.
-        Otherwise assign the lowest available port starting from _port_start.
-        """
-        domain_file = program.getDomainFile()
-        path = str(domain_file.getPathname())
-
-        if path in self._program_path_to_port:
-            return self._program_path_to_port[path]
-
-        used_ports = set(self._program_path_to_port.values())
-        port = self._port_start
-        while port in used_ports:
-            port += 1
-
+    def record(self, program: 'ProgramDB', port: int) -> None:
+        path = str(program.getDomainFile().getPathname())
         self._program_path_to_port[path] = port
-        _Msg().info(self._plugin, f'Assigned port {port} to program {path}')
-        return port
+
+    def candidate_ports(self, program: 'ProgramDB') -> list[int]:
+        """Ordered ports to try for this program: its prior port first (if any),
+        then the rest of the range, excluding ports held by OTHER programs."""
+        path = str(program.getDomainFile().getPathname())
+        prior = self._program_path_to_port.get(path)
+        others = {p for q, p in self._program_path_to_port.items() if q != path}
+        ordered: list[int] = []
+        if prior is not None:
+            ordered.append(prior)
+        ordered += [
+            p
+            for p in range(self._port_start, self._port_end + 1)
+            if p != prior and p not in others
+        ]
+        return ordered
 
     def free_port(self, program: 'ProgramDB') -> None:
         """Release a program's port assignment."""
@@ -213,30 +220,27 @@ class GhidraMcpServer:
             self._app, self._mcp = create_mcp_app(backend, get_port=lambda: self.port)
 
             host = host or self.host
+            from .portspec import bind_listen_socket
+
             if port:
-                pass  # explicit port provided — use it as-is
-            elif self.port:
-                port = self.port
+                candidates = [port]  # explicit -> strict
             elif self._port_manager is not None:
-                port = self._port_manager.assign_port(self.current_program)
+                candidates = self._port_manager.candidate_ports(self.current_program)
             else:
-                port = 0  # headless auto-assign: let OS pick a free port
+                candidates = [0]  # no manager -> OS auto-assign
 
-            _Msg().info(self.plugin, f'Starting MCP Server on {host}:{port}')
             self.host = host
-            self.port = port
+            try:
+                self._socket, self.port = bind_listen_socket(host, candidates)
+            except OSError as e:
+                _Msg().error(self.plugin, f'No free MCP port for {host}: {e}')
+                self._update_state(GhidraMcpServerState.ERROR)
+                return
 
-            # Create socket with SO_REUSEADDR and SO_LINGER for immediate port reuse
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._socket.setsockopt(
-                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0)
-            )
-            self._socket.bind((host, port))
-            self._socket.listen(100)
-            self._socket.setblocking(False)
-            # Update self.port with the OS-assigned port (important when port=0)
-            self.port = self._socket.getsockname()[1]
+            if self._port_manager is not None and self.current_program is not None:
+                self._port_manager.record(self.current_program, self.port)
+
+            _Msg().info(self.plugin, f'Starting MCP Server on {host}:{self.port}')
 
             # Don't pass host/port to config when providing pre-bound sockets
             config = uvicorn.Config(self._app, log_level='info', lifespan='on')

@@ -10,13 +10,13 @@ Authoritative reference for all tools exposed by the MCPyGhidra MCP server via S
 
 ### `list` (list_entries)
 
-**Purpose:** Get a paginated list of binary entries by type (functions, imports, strings, etc.) with optional filtering.
+**Purpose:** Get a paginated list of binary entries by type (functions, imports, strings, types, etc.) with optional filtering.
 
 **Parameters:**
-- `entry_type` (string, required): Type of entries to list. Valid values: `function`, `memory_segment`, `import`, `export`, `string`, `class`, `namespace`
+- `entry_type` (string, required): Type of entries to list. Valid values: `function`, `memory_segment`, `import`, `export`, `string`, `class`, `namespace`, `type`
 - `offset` (integer, optional, default: 0): Pagination offset (starting position)
 - `limit` (integer, optional, default: 500, max: 10000): Maximum items to return per page
-- `match_filter` (string, optional, default: ''): Substring filter on entry name (functions and strings only; case-insensitive)
+- `match_filter` (string, optional, default: ''): Substring filter on entry name (applies to `function`, `string`, and `type` entry types; case-insensitive)
 
 **Returns:** `ListResult` containing:
 - `items[]`: List of entries (each with name, address, and type-specific fields)
@@ -31,6 +31,8 @@ list(entry_type='function') → First 500 functions
 list(entry_type='function', limit=50) → First 50 functions  
 list(entry_type='function', offset=100, limit=50) → Functions 100–149
 list(entry_type='string', match_filter='error', limit=20) → Strings containing "error"
+list(entry_type='type') → First 500 types (structures, enums, typedefs, etc.)
+list(entry_type='type', match_filter='Point') → Types with "Point" in name or path
 ```
 
 **Note:** Batch-capable (via pagination; individual requests are single-page).
@@ -67,20 +69,21 @@ list(entry_type='string', match_filter='error', limit=20) → Strings containing
 
 ---
 
-### `get_funcs`
+### `funcs`
 
-**Purpose:** Get detailed function info by address or name. Accepts batch of addresses/names.
+**Purpose:** Get detailed function info by address or name. Accepts a single address/name or a batch.
 
 **Parameters:**
-- `items` (array of strings, required): Addresses (hex, e.g., `"0x401000"`) or function names (e.g., `"main"`)
+- `target` (string, optional): Single address (hex, e.g., `"0x401000"`) or function name (e.g., `"main"`)
+- `items` (array of strings, optional): Batch of addresses or function names
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `name`: Resolved function name
 - `entrypoint`: Function entry point (hex address)
 - `signature`: Function signature (on success) or null (on failure)
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes (processes multiple addresses/names in one call).
+**Single: pass `target` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -91,26 +94,22 @@ list(entry_type='string', match_filter='error', limit=20) → Strings containing
 **Purpose:** Decompile function(s) to C pseudocode with optional function comments prepended.
 
 **Parameters:**
-- `items` (array of dicts, required): Functions to decompile. Each item:
-  - `addr` (hex address, optional): e.g., `"0x401000"`
-  - `name` (string, optional): e.g., `"main"`
-  - At least one of `addr` or `name` must be provided
+- `addr` (hex address, optional): Single function address, e.g., `"0x401000"`
+- `name` (string, optional): Single function name, e.g., `"main"`
+- `items` (array of dicts, optional): Batch of functions. Each item: `{addr?, name?}` (at least one required)
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `code`: Decompiled C pseudocode (on success)
 - `name`: Resolved function name
 - `entrypoint`: Function entry point (hex)
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr`/`name` directly; Batch: pass `items=[…]`.**
 
-**Example:**
+**Examples:**
 ```
-decompile(items=[
-  {"addr": "0x401000"},
-  {"name": "main"},
-  {"addr": "0x402000"}
-])
+decompile(name="main")
+decompile(items=[{"addr": "0x401000"}, {"name": "main"}, {"addr": "0x402000"}])
 ```
 
 ---
@@ -120,31 +119,28 @@ decompile(items=[
 **Purpose:** Disassemble function(s) or address ranges (merged tool: both function and address modes).
 
 **Parameters:**
-- `items` (array of dicts, required): Disassembly requests. Each item:
-  - `addr` (hex address, optional): e.g., `"0x401000"`
-  - `name` (string, optional): Function name
-  - `count` (integer, optional): Number of instructions to disassemble from addr
-  - **Mode selection:**
-    - `count` set → Address mode (N instructions from addr)
-    - `name` → Function mode (entire function)
-    - `addr` only → Auto-detect (function containing addr, or 20 instructions from addr)
+- `addr` (hex address, optional): Single address, e.g., `"0x401000"`
+- `name` (string, optional): Single function name
+- `count` (integer, optional): Single: instruction count (address mode)
+- `items` (array of dicts, optional): Batch of requests. Each item: `{addr?, name?, count?}`
+- **Mode selection per item:**
+  - `count` set → Address mode (N instructions from addr)
+  - `name` → Function mode (entire function)
+  - `addr` only → Auto-detect (function containing addr, or 20 instructions from addr)
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `asm`: Disassembly text (on success)
 - `addr`: Resolved address
 - `name`: Function name (if function mode)
 - `mode`: 'function' or 'address'
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr`/`name`/`count` directly; Batch: pass `items=[…]`.**
 
 **Examples:**
 ```
-disasm(items=[
-  {"name": "main"},  # Entire main function
-  {"addr": "0x401000", "count": 20},  # 20 instructions from address
-  {"addr": "0x402000"}  # Auto-detect
-])
+disasm(name="main")
+disasm(items=[{"name": "main"}, {"addr": "0x401000", "count": 20}, {"addr": "0x402000"}])
 ```
 
 ---
@@ -154,15 +150,16 @@ disasm(items=[
 **Purpose:** Get symbol info for address(es) — resolve addresses to names and symbol types.
 
 **Parameters:**
-- `items` (array of strings, required): Hex addresses to look up (e.g., `["0x401000", "0x402000"]`)
+- `addr` (hex address, optional): Single address, e.g., `"0x401000"`
+- `items` (array of strings, optional): Batch of hex addresses
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `addr`: Input address
 - `name`: Symbol name (on success)
 - `symbol_type`: One of `function`, `code_label`, `global_variable`, `data_label`, `unknown`
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -171,17 +168,17 @@ disasm(items=[
 **Purpose:** Find cross-references to/from addresses or functions (merged tool: both directions).
 
 **Parameters:**
-- `items` (array of dicts, required): Cross-reference requests. Each item:
-  - `target` (string, required): Hex address (e.g., `"0x401000"`) or function name
-  - `direction` (string, optional, default: 'to'): `"to"` (refs pointing to target) or `"from"` (refs from target)
-  - `offset` (integer, optional, default: 0): Pagination offset
-  - `limit` (integer, optional, default: 500): Max results
+- `target` (string, optional): Single hex address (e.g., `"0x401000"`) or function name
+- `direction` (string, optional, default: 'to'): `"to"` or `"from"`
+- `offset` (integer, optional, default: 0): Single: pagination offset
+- `limit` (integer, optional, default: 500): Single: max results
+- `items` (array of dicts, optional): Batch of requests. Each item: `{target, direction?, offset?, limit?}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `refs`: `ListResult` containing cross-reference items (on success)
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `target`/`direction`/… directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -232,45 +229,19 @@ disasm(items=[
 
 ## Type Inspection & Manipulation
 
-### `types`
-
-**Purpose:** Enumerate and search available types across all type sources (structures, enums, typedefs, etc.) with pagination.
-
-**Parameters:**
-- `pattern` (string, optional, default: null): Substring filter (case-insensitive). Strips `*` if glob-style. None = no filter.
-- `offset` (integer, optional, default: 0): Pagination offset
-- `limit` (integer, optional, default: 500, max: 10000): Max items to return
-
-**Returns:** Array of `TypeSummary` objects, each with:
-- `name`: Short name (e.g., `"istream"`)
-- `full_path`: Full path (e.g., `"std::istream"`)
-- `type_string`: Exact string to pass to type-setting tools
-- `kind`: Normalized type kind
-- `size`: Size in bytes, or null if unknown/variable
-
-**Paginated:** Yes (offset/limit).
-
-**Examples:**
-```
-types() → First 500 types
-types(pattern="stream", limit=100) → Search for stream-related types
-types(offset=50, limit=50) → Next page
-```
-
----
-
 ### `type_info`
 
-**Purpose:** Get detailed type information (members, enum values, etc.) by type name. Batch-capable.
+**Purpose:** Get detailed type information (members, enum values, etc.) by type name. To enumerate all types, use `list(entry_type="type")`.
 
 **Parameters:**
-- `items` (array of strings, required): Type names to look up (short name or full path)
+- `type_name` (string, optional): Single type name (short name or full path)
+- `items` (array of strings, optional): Batch of type names to look up
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - **On success:** `TypeDetails` with name, full_path, type_string, kind, size, comment, members[] (for struct/union), values[] (for enum), underlying_type (for typedef)
 - **On failure:** `{target, error}`
 
-**Batch-capable:** Yes.
+**Single: pass `type_name` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -309,19 +280,19 @@ create_struct(
 
 ### `add_field`
 
-**Purpose:** Add field(s) to struct(s). Batch-capable. If a field already exists at the offset, it will be replaced. Structure is auto-expanded if needed.
+**Purpose:** Add field(s) to struct(s). If a field already exists at the offset, it will be replaced. Structure is auto-expanded if needed.
 
 **Parameters:**
-- `items` (array of dicts, required): Field addition requests. Each item:
-  - `struct_name` (string): Name of the target structure
-  - `field_name` (string): New field name
-  - `field_type` (string): C-style type string (e.g., `"int"`, `"char *"`)
-  - `offset` (integer): Byte offset within structure
-  - `comment` (string, optional): Field comment
+- `struct_name` (string, optional): Single: target structure name
+- `field_name` (string, optional): Single: new field name
+- `field_type` (string, optional): Single: C-style type string (e.g., `"int"`, `"char *"`)
+- `offset` (integer, optional): Single: byte offset within structure
+- `comment` (string, optional): Single: optional field comment
+- `items` (array of dicts, optional): Batch of field requests. Each item: `{struct_name, field_name, field_type, offset, comment?}`
 
-**Returns:** Array of dicts with `FieldAdditionResult` fields (per-item status).
+**Returns:** A dict (single call) or array of dicts (batch call) with `FieldAdditionResult` fields (per-item status).
 
-**Batch-capable:** Yes.
+**Single: pass `struct_name`/`field_name`/`field_type`/`offset` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -332,19 +303,18 @@ create_struct(
 **Purpose:** Rename symbol(s) in the database. Batched with per-item error handling. **This modifies the Ghidra database.**
 
 **Parameters:**
-- `items` (array of dicts, required): Symbol rename requests. Each item:
-  - `new_name` (string, required): New symbol name
-  - `addr` (hex address, optional): e.g., `"0x401000"`
-  - `name` (string, optional): Existing symbol name
-  - At least one of `addr` or `name` must be provided
+- `new_name` (string, optional): Single: new symbol name
+- `addr` (hex address, optional): Single: symbol address, e.g., `"0x401000"`
+- `name` (string, optional): Single: existing symbol name (at least one of `addr`/`name` required)
+- `items` (array of dicts, optional): Batch of rename requests. Each item: `{new_name, addr?, name?}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `addr`: Resolved hex address
 - `old_name`: Previous symbol name
 - `new_name`: New name applied
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `new_name` + `addr`/`name` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -379,44 +349,43 @@ update_vars(
 **Purpose:** Set comment(s) on addresses, functions, or lines (merged 3-in-1 tool). **This modifies the Ghidra database.**
 
 **Parameters:**
-- `items` (array of dicts, required): Comment set requests. Each item:
-  - `comment` (string, required): Comment text
-  - `kind` (string, optional, default: 'both'): Comment type:
-    - `'disasm'` → EOL comment at address (requires addr)
-    - `'decompiler'` → Pre-comment at decompiler line (requires line and addr or name)
-    - `'function'` → Plate comment on function (requires addr or name)
-    - `'both'` (default) → Disasm EOL at addr; ALSO decompiler if line given
-  - `addr` (hex address, optional): e.g., `"0x401000"`
-  - `name` (string, optional): Function name (alternative to addr)
-  - `line` (integer, optional): Decompiler line number (for decompiler comments)
+- `comment` (string, optional): Single: comment text
+- `kind` (string, optional, default: 'both'): Single: comment type:
+  - `'disasm'` → EOL comment at address (requires addr)
+  - `'decompiler'` → Pre-comment at decompiler line (requires line and addr or name)
+  - `'function'` → Plate comment on function (requires addr or name)
+  - `'both'` (default) → Disasm EOL at addr; ALSO decompiler if line given
+- `addr` (hex address, optional): Single: address, e.g., `"0x401000"`
+- `name` (string, optional): Single: function name
+- `line` (integer, optional): Single: decompiler line number
+- `items` (array of dicts, optional): Batch of comment requests. Each item: `{comment, kind?, addr?, name?, line?}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `kind`: Comment type applied
 - `addr`: Target address
 - `message`: Human-readable result (on success)
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `comment` + `addr`/`name` directly; Batch: pass `items=[…]`.**
 
 ---
 
 ### `get_comment`
 
-**Purpose:** Get function plate comment(s) by address or name. Batch-capable.
+**Purpose:** Get function plate comment(s) by address or name.
 
 **Parameters:**
-- `items` (array of dicts, required): Functions to get comments for. Each item:
-  - `addr` (hex address, optional)
-  - `name` (string, optional)
-  - At least one required
+- `addr` (hex address, optional): Single: function address
+- `name` (string, optional): Single: function name (at least one of `addr`/`name` required)
+- `items` (array of dicts, optional): Batch of requests. Each item: `{addr?, name?}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `name`: Function name
 - `addr`: Function entry point address
 - `comment`: Plate comment text (may be empty string)
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr`/`name` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -425,16 +394,16 @@ update_vars(
 **Purpose:** Set function prototype(s) to update signature. **This modifies the Ghidra database.** Old signature is saved in the function comment for reference.
 
 **Parameters:**
-- `items` (array of dicts, required): Function prototype set requests. Each item:
-  - `addr` (hex address, required): Function address
-  - `prototype` (string, required): C-style signature, e.g., `"int main(int argc, char **argv)"`
+- `addr` (hex address, optional): Single: function address
+- `prototype` (string, optional): Single: C-style signature, e.g., `"int main(int argc, char **argv)"`
+- `items` (array of dicts, optional): Batch of requests. Each item: `{addr, prototype}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `addr`: Function address
 - `name`: Function name
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr` + `prototype` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -443,15 +412,15 @@ update_vars(
 **Purpose:** Overwrite bytes at address(es) to modify instruction(s). **This modifies the Ghidra database and is destructive.** Clears existing code unit, writes bytes, re-disassembles.
 
 **Parameters:**
-- `items` (array of dicts, required): Patch requests. Each item:
-  - `addr` (hex address, required): Target address
-  - `hex_bytes` (string, required): New instruction bytes as hex string (e.g., `"90"` for NOP)
+- `addr` (hex address, optional): Single: target address
+- `hex_bytes` (string, optional): Single: new bytes as hex string, e.g., `"90"` for NOP
+- `items` (array of dicts, optional): Batch of patch requests. Each item: `{addr, hex_bytes}`
 
-**Returns:** Array of dicts, each with:
+**Returns:** A dict (single call) or array of dicts (batch call), each with:
 - `addr`: Patched address
 - `error`: null on success; error message on failure
 
-**Batch-capable:** Yes.
+**Single: pass `addr` + `hex_bytes` directly; Batch: pass `items=[…]`.**
 
 ---
 
@@ -675,12 +644,12 @@ MCPyGhidra also exposes several resources (read-only endpoints) accessible via U
 
 ## Tool Count & Categories
 
-**Total: 26 tools** (25 standard + 1 GUI-only)
+**Total: 25 tools** (24 standard + 1 GUI-only)
 
-**Core (4):** list, cursor, context, get_funcs  
+**Core (4):** list, cursor, context, funcs  
 **Analysis (5):** decompile, disasm, symbols, xrefs, cfg  
 **Graphs (1):** callgraph  
-**Types (4):** types, type_info, create_struct, add_field  
+**Types (3):** type_info, create_struct, add_field  
 **Modification (6):** rename, update_vars, set_comments, get_comment, set_prototype, patch  
 **Transactions (2):** begin_trans, end_trans  
 **Scripting (1):** pyghidra  
@@ -691,7 +660,7 @@ MCPyGhidra also exposes several resources (read-only endpoints) accessible via U
 
 Tools marked with `readOnlyHint` are read-only and can be disabled via `MCPY_DISABLE_READONLY_TOOLS=1`.
 
-**Read-only:** list, cursor, context, get_funcs, decompile, disasm, symbols, xrefs, cfg, callgraph, types, type_info, find_bytes, find_insns, get_comment
+**Read-only:** list, cursor, context, funcs, decompile, disasm, symbols, xrefs, cfg, callgraph, type_info, find_bytes, find_insns, get_comment
 
 **Write-capable:** rename, update_vars, set_comments, set_prototype, patch, begin_trans, end_trans, create_struct, add_field, pyghidra, open_program
 

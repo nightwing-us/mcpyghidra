@@ -6,6 +6,49 @@ format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-06-26
+
+Tool ergonomics for smaller LLM clients (single-or-batch calls), a simpler tool
+surface, parallel-safe ports, and a self-diagnosing headless CLI.
+
+### Added
+
+- **Items-based tools now accept a single flat call *or* a batch.** Call
+  `decompile(name="main")` / `decompile(addr="0x401000")`, `funcs(target="main")`,
+  `symbols(addr="0x401000")` directly, or keep the batch form
+  `decompile(items=[{…}, {…}])`. A single (flat) call returns one result; a batch
+  returns a list. Applies to `decompile`, `disasm`, `xrefs`, `symbols`, `funcs`,
+  `type_info`, `get_comment`, `rename`, `set_comments`, `set_prototype`, `patch`,
+  and `add_field`.
+- **The headless `--port` accepts a range (default `6050-6059`) and binds the
+  first free port.** Multiple headless servers can now launch in parallel without
+  colliding. A bare single port is strict; `0` lets the OS auto-assign. The JSON
+  ready signal reports the actually-bound port.
+- **The headless launcher now prints a structured JSON status line for every
+  outcome.** `{"status":"ready",…}` on success and
+  `{"status":"error","reason":…,"detail":…}` on failure, each with a per-reason
+  exit code; the resolved Ghidra install/version/binary is echoed on startup. A
+  background or polling launcher can now diagnose the first failure from stdout
+  alone, without a foreground re-run.
+- **`--ghidra-dir DIR`** pins the Ghidra installation for a self-contained
+  invocation (overrides `GHIDRA_INSTALL_DIR`).
+
+### Changed
+
+- **`get_funcs` is renamed to `funcs`** for consistency with the other read tools.
+- **Type enumeration moved into `list(entry_type="type")`; the standalone `types`
+  tool was removed.** `match_filter` now applies to types as well.
+- **The GUI MCP server binds the first free port in its configured range** instead
+  of failing when the port is already in use.
+- **`mcpyghidra-headless` takes the binary as a positional argument** —
+  `mcpyghidra-headless /path/to/binary` (the `--binary` flag is removed).
+
+### Fixed
+
+- **Calling an items-based tool with no (or conflicting) arguments now returns a
+  clear, instructive error** — e.g. pointing you at `list(entry_type="function")`
+  — instead of an opaque "`items` is a required property" schema failure.
+
 ## [0.7.1] — 2026-06-17
 
 Headless-server improvements: persistent, reusable Ghidra projects and reliable
@@ -92,7 +135,8 @@ globals and are unaffected.
 
 First public release.
 
-[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightwing-us/mcpyghidra/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nightwing-us/mcpyghidra/releases/tag/v0.6.0

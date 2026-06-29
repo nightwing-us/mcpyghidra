@@ -653,40 +653,40 @@ class TestResolveFieldType:
 
 
 # ---------------------------------------------------------------------------
-# types() async function — validation and filter branches
+# list_entries(entry_type='type') validation — offset/limit branches
 # ---------------------------------------------------------------------------
 
 
 class TestTypesAsyncValidation:
-    """types() input validation branches."""
+    """list_entries(entry_type='type') input validation branches (formerly types())."""
 
     def test_negative_offset_raises(self):
-        """offset < 0 → ToolError."""
-        from mcpyghidra.tools.types import types
+        """offset < 0 → ToolError via list_entries."""
+        from mcpyghidra.tools.core import list_entries
 
         backend = _make_backend()
         with pytest.raises(ToolError, match='offset must be non-negative'):
-            _run_async(types, backend, offset=-1)
+            _run_async(list_entries, backend, entry_type='type', offset=-1)
 
     def test_zero_limit_raises(self):
-        """limit <= 0 → ToolError."""
-        from mcpyghidra.tools.types import types
+        """limit <= 0 → ToolError via list_entries."""
+        from mcpyghidra.tools.core import list_entries
 
         backend = _make_backend()
         with pytest.raises(ToolError, match='limit must be positive'):
-            _run_async(types, backend, limit=0)
+            _run_async(list_entries, backend, entry_type='type', limit=0)
 
     def test_negative_limit_raises(self):
-        """limit < 0 → ToolError."""
-        from mcpyghidra.tools.types import types
+        """limit < 0 → ToolError via list_entries."""
+        from mcpyghidra.tools.core import list_entries
 
         backend = _make_backend()
         with pytest.raises(ToolError, match='limit must be positive'):
-            _run_async(types, backend, limit=-5)
+            _run_async(list_entries, backend, entry_type='type', limit=-5)
 
 
 class TestTypesSyncFilter:
-    """_types_sync pattern filter and pagination branches."""
+    """_iter_type_summaries pattern filter branches (formerly _types_sync)."""
 
     def _make_backend_with_types(self, types_list):
         backend = _make_backend()
@@ -705,64 +705,63 @@ class TestTypesSyncFilter:
 
     def test_no_pattern_returns_all(self):
         """Without pattern, all types are returned."""
-        from mcpyghidra.tools.types import _types_sync
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dts = [self._make_dt('Alpha'), self._make_dt('Beta')]
         backend = self._make_backend_with_types(dts)
-        result = _types_sync(backend, None, 0, 500)
+        result = _iter_type_summaries(backend, None)
         assert len(result) == 2
 
     def test_pattern_filters_by_name(self):
         """Pattern 'alp' matches 'Alpha' but not 'Beta'."""
-        from mcpyghidra.tools.types import _types_sync
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dts = [self._make_dt('Alpha'), self._make_dt('Beta')]
         backend = self._make_backend_with_types(dts)
-        result = _types_sync(backend, 'alp', 0, 500)
+        result = _iter_type_summaries(backend, 'alp')
         assert len(result) == 1
         assert result[0].name == 'Alpha'
 
     def test_pattern_glob_stripped(self):
         """Leading and trailing '*' are stripped from pattern before matching."""
-        from mcpyghidra.tools.types import _types_sync
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dts = [self._make_dt('Alpha'), self._make_dt('Beta')]
         backend = self._make_backend_with_types(dts)
-        result = _types_sync(backend, '*alp*', 0, 500)
+        result = _iter_type_summaries(backend, '*alp*')
         assert len(result) == 1
 
     def test_pattern_matches_full_path(self):
         """Pattern matching against full_path when name doesn't match."""
-        from mcpyghidra.tools.types import _types_sync
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dt = self._make_dt('X', path='/Some/Namespace/MySpecialType')
         backend = self._make_backend_with_types([dt])
-        result = _types_sync(backend, 'special', 0, 500)
+        result = _iter_type_summaries(backend, 'special')
         assert len(result) == 1
 
     def test_empty_pattern_matches_none_via_lower(self):
-        """Empty string pattern after strip matches everything (every name contains '')."""
-        from mcpyghidra.tools.types import _types_sync
+        """Empty string pattern after strip is falsy → no filtering applied."""
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dts = [self._make_dt('Alpha'), self._make_dt('Beta')]
         backend = self._make_backend_with_types(dts)
-        # Empty pattern is falsy → no filtering applied
-        result = _types_sync(backend, '', 0, 500)
+        result = _iter_type_summaries(backend, '')
         assert len(result) == 2
 
     def test_pagination_offset_slices_results(self):
-        """offset=1, limit=1 → only second result returned."""
-        from mcpyghidra.tools.types import _types_sync
+        """offset=1, limit=1 → only second result returned (via list_types_result)."""
+        from mcpyghidra.tools.types import list_types_result
 
         dts = [self._make_dt('Alpha'), self._make_dt('Beta')]
         backend = self._make_backend_with_types(dts)
-        result = _types_sync(backend, None, 1, 1)
-        assert len(result) == 1
-        assert result[0].name == 'Beta'
+        result = list_types_result(backend, 1, 1)
+        assert result.page_info.num_returned == 1
+        assert result.items[0]['name'] == 'Beta'
 
     def test_path_none_still_matches_by_name(self):
         """getPathName() returns None → full_path falls back to name for filter check."""
-        from mcpyghidra.tools.types import _types_sync
+        from mcpyghidra.tools.types import _iter_type_summaries
 
         dt = MagicMock()
         dt.getName.return_value = 'NoPath'
@@ -770,7 +769,7 @@ class TestTypesSyncFilter:
         dt.getDisplayName.return_value = 'NoPath'
         dt.getLength.return_value = 4
         backend = self._make_backend_with_types([dt])
-        result = _types_sync(backend, 'nopath', 0, 500)
+        result = _iter_type_summaries(backend, 'nopath')
         assert len(result) == 1
 
 
@@ -1141,17 +1140,19 @@ class TestTypeInfoAsync:
 class TestAsyncWrapperSmoke:
     """Smoke tests for the async wrappers to ensure the return/await lines are covered."""
 
-    def test_types_async_returns_list(self):
-        """types() async return path (line 311) — happy path with no types."""
-        from mcpyghidra.tools.types import types
+    def test_list_entry_type_returns_listresult(self):
+        """list_entries(entry_type='type') returns a ListResult with empty items when no types."""
+        from mcpyghidra.tools.core import list_entries
 
         backend = _make_backend()
         dtm = MagicMock()
         dtm.getAllDataTypes.return_value = []
         backend.get_data_type_managers.return_value = [dtm]
 
-        result = _run_async(types, backend)
-        assert isinstance(result, list)
+        result = _run_async(list_entries, backend, entry_type='type', offset=0, limit=500)
+        assert hasattr(result, 'page_info')
+        assert result.entry_type == 'type'
+        assert isinstance(result.items, list)
 
     def test_create_struct_async_returns_result(self):
         """create_struct() async return path (line 415) — minimal struct creation."""

@@ -36,7 +36,7 @@ class TestBuildSelfNamespace:
     def test_contains_published_tools(self):
         ns = _build_self_namespace(_make_backend(), 'mcp')
         assert isinstance(ns, ToolNamespace)
-        for t in ('decompile', 'rename', 'list', 'types', 'xrefs', 'patch'):
+        for t in ('decompile', 'rename', 'list', 'type_info', 'xrefs', 'patch'):
             assert t in ns._children, f'{t} missing from mcp.self'
             assert callable(ns._children[t])
 

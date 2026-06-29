@@ -38,6 +38,7 @@ EntryTypes = Literal[
     'string',
     'class',
     'namespace',
+    'type',
     'cross-reference',
 ]
 

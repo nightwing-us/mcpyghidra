@@ -1,7 +1,7 @@
 """Unit tests for batch tool function contracts.
 
 Verifies that batch tool functions (decompile, disasm, symbols, xrefs, rename,
-set_comments, get_comment, set_prototype, patch, add_field, type_info, get_funcs)
+set_comments, get_comment, set_prototype, patch, add_field, type_info, funcs)
 always return list[dict] and handle per-item errors gracefully.
 
 These tests run without Ghidra/pyghidra by patching the backend at call boundaries.

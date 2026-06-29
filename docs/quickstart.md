@@ -28,7 +28,7 @@ echo $GHIDRA_INSTALL_DIR
 Start MCPyGhidra with a binary to analyze:
 
 ```bash
-mcpyghidra-headless --binary /path/to/firmware.elf
+mcpyghidra-headless /path/to/firmware.elf
 ```
 
 Expected output:
@@ -137,22 +137,48 @@ The server will stop gracefully.
 
 ## Headless Server Options
 
-The `mcpyghidra-headless` command accepts these flags:
+The `mcpyghidra-headless` command accepts these options:
 
 ```bash
-mcpyghidra-headless --binary <path> [--host <host>] [--port <port>]
+mcpyghidra-headless <binary> [--host <host>] [--port <port>] [--project-dir <dir>] [--project-name <name>] [--ghidra-dir <dir>]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--binary` (required) | — | Path to the binary to analyze |
+| `binary` (positional, required) | — | Path to the binary to analyze |
 | `--host` | `127.0.0.1` | Host to bind the server (localhost by default) |
-| `--port` | `6050` | Port number (use `0` for automatic assignment) |
+| `--port` | `6050-6059` | Port or inclusive range (default `6050-6059`); the first free port is bound. Use a bare port for strict, or `0` to let the OS assign. |
+| `--project-dir` | An auto-named `<binary>_ghidra` project beside the binary | Directory for the Ghidra project |
+| `--project-name` | Derived from the binary | Name of the Ghidra project |
+| `--ghidra-dir` | `$GHIDRA_INSTALL_DIR` | Override Ghidra installation directory |
+
+**Output:** On success, the server prints a JSON readiness signal:
+
+```json
+{"status": "ready", "host": "127.0.0.1", "port": 6050, "binary": "/path/to/firmware.elf"}
+```
+
+On failure, it prints a JSON error signal and exits with a descriptive exit code:
+
+```json
+{"status": "error", "reason": "<reason>", "detail": "..."}
+```
+
+The `reason` field indicates the error type. Possible values:
+- `binary_not_found` — The binary file does not exist or is not readable
+- `missing_install_dir` — Ghidra installation directory not found or not configured
+- `bad_port` — Invalid port specification (not a number or out of range)
+- `port_unavailable` — The specified port is already in use
+- `jvm_not_found` — Java runtime not found or not properly configured
+- `open_failed` — Failed to open or analyze the binary in Ghidra
+- `internal` — Unexpected internal error
+
+This allows launcher integrations to parse stdout for status and diagnostics.
 
 Example: auto-assign port and bind to all interfaces:
 
 ```bash
-mcpyghidra-headless --binary /path/to/firmware.elf --host 0.0.0.0 --port 0
+mcpyghidra-headless /path/to/firmware.elf --host 0.0.0.0 --port 0
 ```
 
 The readiness JSON will show the actual assigned port.
@@ -195,7 +221,7 @@ curl http://127.0.0.1:6050/mcp
 Analysis of large binaries can take minutes. Wait longer or use a smaller test binary:
 
 ```bash
-mcpyghidra-headless --binary /bin/ls
+mcpyghidra-headless /bin/ls
 ```
 
 For more help, see [Installation & Setup](installation.md) and [Tools Reference](tools-reference.md).

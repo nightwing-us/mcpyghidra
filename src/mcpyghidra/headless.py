@@ -4,8 +4,8 @@ Launch Ghidra headless, open a binary, run auto-analysis, and start
 the MCP server. Blocks until interrupted.
 
 Usage:
-    mcpyghidra-headless --binary /path/to/elf [--host 127.0.0.1] [--port 6050]
-    python -m mcpyghidra.headless --binary /path/to/elf
+    mcpyghidra-headless /path/to/elf [--host 127.0.0.1] [--port 6050-6059]
+    python -m mcpyghidra.headless /path/to/elf
 
 Prints JSON readiness signal to stdout when the server is ready:
     {"status": "ready", "host": "127.0.0.1", "port": 6050, "binary": "/path/to/elf"}
@@ -19,10 +19,7 @@ MCPyGhidra targets Ghidra 11.x and 12.0+.
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import socket
-import struct
 import sys
 from pathlib import Path
 
@@ -50,7 +47,50 @@ def _resolve_project(
     return project_parent, name, program_path
 
 
-def _run_server(program, host: str, port: int, binary_path: Path) -> None:
+def _resolve_startup(args) -> tuple[Path, list[int]]:
+    """Validate args before the pyghidra import. Returns (binary_path, candidates).
+
+    Raises StartupError(reason, detail, remediation) on any pre-import failure and
+    sets GHIDRA_INSTALL_DIR from --ghidra-dir when given.
+    """
+    from mcpyghidra.cli_status import StartupError
+    from mcpyghidra.portspec import parse_port_spec
+
+    binary_path = Path(args.binary).resolve()
+    if not binary_path.exists():
+        raise StartupError(
+            'binary_not_found',
+            f'binary not found: {binary_path}',
+            f'binary not found: {binary_path}',
+        )
+
+    try:
+        candidates = parse_port_spec(args.port)
+    except ValueError as e:
+        raise StartupError(
+            'bad_port', f'invalid --port {args.port!r}: {e}', 'use N, N-M, or 0'
+        ) from e
+
+    if args.ghidra_dir:
+        gdir = Path(args.ghidra_dir).resolve()
+        if not (gdir / 'Ghidra' / 'application.properties').is_file():
+            raise StartupError(
+                'missing_install_dir',
+                f'not a Ghidra install: {gdir}',
+                f'pass --ghidra-dir <dir> or set GHIDRA_INSTALL_DIR. Searched: {gdir}',
+            )
+        os.environ['GHIDRA_INSTALL_DIR'] = str(gdir)
+    elif not os.environ.get('GHIDRA_INSTALL_DIR'):
+        raise StartupError(
+            'missing_install_dir',
+            'GHIDRA_INSTALL_DIR not set and --ghidra-dir not given',
+            'pass --ghidra-dir <dir> or set GHIDRA_INSTALL_DIR',
+        )
+
+    return binary_path, candidates
+
+
+def _run_server(program, host: str, candidates: list[int], binary_path: Path) -> None:
     """Start the MCP server for an opened program and block until interrupted.
 
     Returns when interrupted (SIGTERM/SIGINT -> KeyboardInterrupt) so the caller
@@ -58,29 +98,32 @@ def _run_server(program, host: str, port: int, binary_path: Path) -> None:
     """
     import time
 
-    print(f'Starting MCP server on {host}:{port}...', file=sys.stderr)
-    server = _create_server(program, host, port)
+    from mcpyghidra.cli_status import emit_error, emit_ready
 
-    # Verify port was actually assigned (required when --port 0 is used)
+    print(f'Starting MCP server on {host} (ports {candidates})...', file=sys.stderr)
+    try:
+        server = _create_server(program, host, candidates)
+    except OSError as e:
+        sys.exit(
+            emit_error(
+                'port_unavailable',
+                f'could not bind a port in {candidates}: {e}',
+                remediation='pass a --port range (e.g. 6150-6159) or omit --port',
+            )
+        )
+
     actual_port = server['port']
     if actual_port is None or actual_port <= 0:
-        print(
-            f'Error: server port not assigned correctly (got {actual_port!r})',
-            file=sys.stderr,
+        sys.exit(
+            emit_error(
+                'port_unavailable',
+                f'server port not assigned correctly (got {actual_port!r})',
+            )
         )
-        sys.exit(1)
 
-    status = {
-        'status': 'ready',
-        'host': host,
-        'port': actual_port,
-        'binary': str(binary_path),
-    }
-    # JSON ready signal on stdout (parsed by tests and MCP client CLIs)
-    print(json.dumps(status), flush=True)
+    emit_ready(host, actual_port, str(binary_path))
 
     try:
-        # Block until interrupted
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
@@ -88,14 +131,13 @@ def _run_server(program, host: str, port: int, binary_path: Path) -> None:
         server['stop']()
 
 
-def main() -> None:
+def _main() -> None:
     parser = argparse.ArgumentParser(
         description='MCPyGhidra headless MCP server',
     )
     parser.add_argument(
-        '--binary',
-        required=True,
-        help='Path to binary file to analyze',
+        'binary',
+        help='Path to the binary file to analyze (positional).',
     )
     parser.add_argument(
         '--host',
@@ -104,9 +146,12 @@ def main() -> None:
     )
     parser.add_argument(
         '--port',
-        type=int,
-        default=6050,
-        help='Port for MCP server (default: 6050, 0 for auto-assign)',
+        type=str,
+        default='6050-6059',
+        help=(
+            'Port or inclusive range for the MCP server (default: 6050-6059; '
+            'a single port is strict; 0 = OS auto-assign). Binds the first free port.'
+        ),
     )
     parser.add_argument(
         '--project-dir',
@@ -119,29 +164,20 @@ def main() -> None:
         default=None,
         help='Name of the Ghidra project (default: derived from the binary).',
     )
+    parser.add_argument(
+        '--ghidra-dir',
+        default=None,
+        help='Ghidra installation directory. Overrides GHIDRA_INSTALL_DIR. '
+        'If neither is set, the launcher errors.',
+    )
     args = parser.parse_args()
 
-    binary_path = Path(args.binary).resolve()
-    if not binary_path.exists():
-        print(f'Error: binary not found: {binary_path}', file=sys.stderr)
-        sys.exit(1)
+    from mcpyghidra.cli_status import StartupError, emit_error
 
-    # Check prerequisites before expensive imports
-    if not os.environ.get('GHIDRA_INSTALL_DIR'):
-        print(
-            'Error: GHIDRA_INSTALL_DIR environment variable not set.\n'
-            '\n'
-            'Set it to your Ghidra installation directory:\n'
-            '  export GHIDRA_INSTALL_DIR=/path/to/ghidra_11.3_PUBLIC\n'
-            '\n'
-            'Prerequisites:\n'
-            '  1. Install Ghidra 11.1+ from https://ghidra-sre.org\n'
-            '  2. pip install mcpyghidra pyghidra\n'
-            '  3. export GHIDRA_INSTALL_DIR=/path/to/ghidra\n'
-            '  4. mcpyghidra-headless --binary /path/to/elf',
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    try:
+        binary_path, port_candidates = _resolve_startup(args)
+    except StartupError as e:
+        sys.exit(emit_error(e.reason, e.detail, remediation=e.remediation))
 
     # Late imports — pyghidra starts the JVM
     import signal as _signal
@@ -168,14 +204,21 @@ def main() -> None:
         _launcher.add_vmargs('-Xrs')
         _launcher.start()
     except Exception as e:
-        print(
-            f'Error: Failed to start Ghidra headless: {e}\n'
-            '\n'
-            f'GHIDRA_INSTALL_DIR is set to: {os.environ.get("GHIDRA_INSTALL_DIR")}\n'
-            'Make sure this points to a valid Ghidra installation.',
-            file=sys.stderr,
+        sys.exit(
+            emit_error(
+                'jvm_not_found',
+                f'failed to start the JVM: {e}',
+                remediation='no compatible JDK found; Ghidra 12 needs JDK 21+ on PATH or JAVA_HOME',
+            )
         )
-        sys.exit(1)
+
+    from ghidra.framework import Application
+
+    print(
+        f'Using Ghidra {Application.getApplicationVersion()} '
+        f'({os.environ["GHIDRA_INSTALL_DIR"]}) · binary {binary_path.name}',
+        file=sys.stderr,
+    )
 
     print(f'Opening and analyzing {binary_path.name}...', file=sys.stderr)
     from ghidra.program.util import GhidraProgramUtilities
@@ -188,46 +231,74 @@ def main() -> None:
     # Modern pyghidra API (open_program is deprecated). open_project +
     # program_loader (first run: import) / program_context (reopen) gives us
     # explicit control over the save, which the signal handling above relies on.
-    with pyghidra.open_project(project_parent, project_name, create=True) as project:
-        # First launch imports the binary into the project; later launches reopen
-        # the existing program so prior analysis and edits are preserved.
-        if project.getProjectData().getFile(program_path) is None:
-            loader = (
-                pyghidra
-                .program_loader()
-                .project(project)
-                .source(str(binary_path))
-                .name(binary_path.name)
-                .projectFolderPath('/')
+    try:
+        with pyghidra.open_project(
+            project_parent, project_name, create=True
+        ) as project:
+            # First launch imports the binary into the project; later launches reopen
+            # the existing program so prior analysis and edits are preserved.
+            if project.getProjectData().getFile(program_path) is None:
+                loader = (
+                    pyghidra
+                    .program_loader()
+                    .project(project)
+                    .source(str(binary_path))
+                    .name(binary_path.name)
+                    .projectFolderPath('/')
+                )
+                with loader.load() as load_results:
+                    load_results.save(pyghidra.task_monitor())
+
+            with pyghidra.program_context(project, program_path) as program:
+                # analyze() always re-analyzes; only run it when the program has not
+                # been analyzed yet (fresh import) so reopens stay fast and keep edits.
+                if GhidraProgramUtilities.shouldAskToAnalyze(program):
+                    pyghidra.analyze(program)
+                try:
+                    _run_server(program, args.host, port_candidates, binary_path)
+                finally:
+                    # We own the save now (open_program used to do it). This runs on
+                    # the SIGTERM->KeyboardInterrupt unwind, persisting to the project.
+                    program.save('MCPyGhidra session', pyghidra.task_monitor())
+    except Exception as e:
+        sys.exit(
+            emit_error(
+                'open_failed', f'failed to open or analyze {binary_path.name}: {e}'
             )
-            with loader.load() as load_results:
-                load_results.save(pyghidra.task_monitor())
-
-        with pyghidra.program_context(project, program_path) as program:
-            # analyze() always re-analyzes; only run it when the program has not
-            # been analyzed yet (fresh import) so reopens stay fast and keep edits.
-            if GhidraProgramUtilities.shouldAskToAnalyze(program):
-                pyghidra.analyze(program)
-            try:
-                _run_server(program, args.host, args.port, binary_path)
-            finally:
-                # We own the save now (open_program used to do it). This runs on
-                # the SIGTERM->KeyboardInterrupt unwind, persisting to the project.
-                program.save('MCPyGhidra session', pyghidra.task_monitor())
+        )
 
 
-def _create_server(program, host: str, port: int) -> dict:
+def main() -> None:
+    from mcpyghidra.cli_status import emit_error
+
+    try:
+        _main()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print('Interrupted before ready.', file=sys.stderr)
+        sys.exit(130)
+    except Exception as e:  # pragma: no cover - last-resort guard
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(emit_error('internal', f'unexpected error: {e}'))
+
+
+def _create_server(program, host: str, candidates: list[int]) -> dict:
     """Create and start the MCP server with HeadlessBackend.
 
     Uses create_mcp_app from server.py directly, then starts uvicorn
-    with a pre-bound socket (to support port=0 auto-assign).
+    with a pre-bound socket (to support port=0 auto-assign and range specs).
 
     Returns a dict with 'port' (int) and 'stop' (callable).
+    Raises OSError if no candidate port in `candidates` can be bound.
     """
     import threading
     import time
 
     from mcpyghidra.backend import HeadlessBackend
+    from mcpyghidra.portspec import bind_listen_socket
     from mcpyghidra.server import create_mcp_app, ThreadedServer
     import uvicorn
 
@@ -240,14 +311,7 @@ def _create_server(program, host: str, port: int) -> dict:
     port_container: list[int | None] = [None]
     app, _mcp = create_mcp_app(backend, get_port=lambda: port_container[0])
 
-    # Create socket with SO_REUSEADDR and SO_LINGER for immediate port reuse
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-    sock.bind((host, port))
-    sock.listen(100)
-    sock.setblocking(False)
-    actual_port = sock.getsockname()[1]
+    sock, actual_port = bind_listen_socket(host, candidates)
     port_container[0] = actual_port  # now visible to server://info via the lambda
 
     config = uvicorn.Config(app, log_level='info', lifespan='on')
@@ -261,11 +325,12 @@ def _create_server(program, host: str, port: int) -> dict:
     while not server.started:
         time.sleep(1e-3)
         if time.time() > deadline:
-            print('Error: timed out waiting for MCP server to start.', file=sys.stderr)
+            from mcpyghidra.cli_status import emit_error
+
             server.should_exit = True
             server_thread.join(timeout=2.0)
             sock.close()
-            sys.exit(1)
+            sys.exit(emit_error('internal', 'MCP server did not start within 5s'))
 
     def stop():
         server.should_exit = True

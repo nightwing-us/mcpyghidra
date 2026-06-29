@@ -1,4 +1,4 @@
-"""Core read-only tools: list, cursor, context, get_funcs.
+"""Core read-only tools: list, cursor, context, funcs.
 
 All functions take ``backend: GhidraBackend`` as their first argument.
 These are standalone functions — no class needed — registered via the
@@ -508,15 +508,16 @@ async def list_entries(
     - entry_type: Type of entry to list
     - offset: Starting position for pagination (default 0)
     - limit: Maximum results to return (default 500)
-    - match_filter: Substring filter (only works for function, string types)
+    - match_filter: Substring filter (works for function, string, and type entry_types)
 
-    VALID entry_type VALUES: function, memory_segment, import, export, string, class, namespace
+    VALID entry_type VALUES: function, memory_segment, import, export, string, class, namespace, type
 
     EXAMPLES:
     - list(entry_type='function') -> first 500 functions
     - list(entry_type='function', limit=50) -> first 50 functions
     - list(entry_type='function', offset=100, limit=50) -> functions 100-149
-    - list(entry_type='string', match_filter='error', limit=20) -> first 20 strings containing 'error'"""
+    - list(entry_type='string', match_filter='error', limit=20) -> first 20 strings containing 'error'
+    - list(entry_type='type', match_filter='Point') -> types with 'Point' in name or path"""
     offset = int(offset) if offset else 0
     if offset < 0:
         raise ToolError('offset must be non-negative')
@@ -550,6 +551,10 @@ def _list_entries_sync(
         return _list_classes(backend, offset, limit)
     elif entry_type == 'namespace':
         return _list_namespaces(backend, offset, limit)
+    elif entry_type == 'type':
+        from mcpyghidra.tools.types import list_types_result
+
+        return list_types_result(backend, offset, limit, match_filter)
     else:
         raise ToolError(f'Unsupported entry type: {entry_type}')
 
@@ -757,7 +762,7 @@ def _context_sync(backend: GhidraBackend) -> BinaryContext:
     )
 
 
-async def get_funcs(
+async def funcs(
     backend: GhidraBackend,
     items: list[str],
 ) -> list[dict]:
@@ -772,10 +777,10 @@ async def get_funcs(
     - target, error: input target and error message (on failure)"""
     if not isinstance(items, list):
         items = [items]
-    return await anyio.to_thread.run_sync(lambda: _get_funcs_sync(backend, items))
+    return await anyio.to_thread.run_sync(lambda: _funcs_sync(backend, items))
 
 
-def _get_funcs_sync(backend: GhidraBackend, items: list[str]) -> list[dict]:
+def _funcs_sync(backend: GhidraBackend, items: list[str]) -> list[dict]:
     """Sync implementation — runs in thread pool."""
     results: list[dict] = []
     for target in items:

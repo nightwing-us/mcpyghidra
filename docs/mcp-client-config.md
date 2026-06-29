@@ -27,7 +27,7 @@ If using mcpo as a bridge to Claude Desktop, configure MCPyGhidra in mcpo's own 
 1. Start MCPyGhidra:
    ```bash
    export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.0_PUBLIC
-   mcpyghidra-headless --binary /path/to/firmware.elf
+   mcpyghidra-headless /path/to/firmware.elf
    ```
 
 2. Create or edit `~/.mcpo/config.json` to configure mcpo's connection to MCPyGhidra:
@@ -126,7 +126,7 @@ If MCPyGhidra is running on a different machine (not localhost):
 **Note:** The headless server binds to `127.0.0.1` by default for security. To allow remote connections, bind to `0.0.0.0`:
 
 ```bash
-mcpyghidra-headless --binary /path/to/firmware.elf --host 0.0.0.0 --port 6050
+mcpyghidra-headless /path/to/firmware.elf --host 0.0.0.0 --port 6050
 ```
 
 Then connect via the remote IP:
@@ -204,14 +204,14 @@ You will see a `200 OK` response with streaming headers (stays open until Ctrl+C
 Use a different port:
 
 ```bash
-mcpyghidra-headless --binary /path/to/firmware.elf --port 6051
+mcpyghidra-headless /path/to/firmware.elf --port 6051
 # Update client config to use :6051
 ```
 
 Or use automatic port assignment:
 
 ```bash
-mcpyghidra-headless --binary /path/to/firmware.elf --port 0
+mcpyghidra-headless /path/to/firmware.elf --port 0
 # Check the readiness JSON for the actual port
 ```
 

@@ -227,38 +227,38 @@ class TestContextTool:
 
 
 # ---------------------------------------------------------------------------
-# Tool 4: get_funcs
+# Tool 4: funcs
 # ---------------------------------------------------------------------------
 
-class TestGetFuncsTool:
-    """Tool: get_funcs — items: list of addr/name strings."""
+class TestFuncsTool:
+    """Tool: funcs — items: list of addr/name strings."""
 
-    def test_get_funcs_by_name(self, headless_server):
-        """get_funcs(['main']) returns function info."""
-        result = mcp_call(headless_server, 'get_funcs', {
+    def test_funcs_by_name(self, headless_server):
+        """funcs(['main']) returns function info."""
+        result = mcp_call(headless_server, 'funcs', {
             'items': ['main'],
         })
         assert 'main' in result
 
-    def test_get_funcs_multiple(self, headless_server):
-        """get_funcs with multiple names returns multiple results."""
-        result = mcp_call(headless_server, 'get_funcs', {
+    def test_funcs_multiple(self, headless_server):
+        """funcs with multiple names returns multiple results."""
+        result = mcp_call(headless_server, 'funcs', {
             'items': ['main', 'check_password'],
         })
         assert 'main' in result
         assert 'check_password' in result
 
-    def test_get_funcs_by_address(self, headless_server, binary_addresses):
-        """get_funcs with hex address returns function info."""
+    def test_funcs_by_address(self, headless_server, binary_addresses):
+        """funcs with hex address returns function info."""
         main_addr = binary_addresses['main']
-        result = mcp_call(headless_server, 'get_funcs', {
+        result = mcp_call(headless_server, 'funcs', {
             'items': [main_addr],
         })
         assert 'main' in result
 
-    def test_get_funcs_unknown_name_returns_error_field(self, headless_server):
-        """get_funcs with unknown name returns per-item error, not MCP error."""
-        result = mcp_call(headless_server, 'get_funcs', {
+    def test_funcs_unknown_name_returns_error_field(self, headless_server):
+        """funcs with unknown name returns per-item error, not MCP error."""
+        result = mcp_call(headless_server, 'funcs', {
             'items': ['nonexistent_function_xyz_123'],
         })
         # Should be a per-item error in the response list, not a top-level MCP error
@@ -424,7 +424,7 @@ class TestRenameTool:
         assert 'cp_test_tmp' in result1 or 'error' not in result1.lower()
 
         # Step 2: verify the new name exists
-        result2 = mcp_call(fresh_headless_server, 'get_funcs', {
+        result2 = mcp_call(fresh_headless_server, 'funcs', {
             'items': ['cp_test_tmp'],
         })
         assert 'cp_test_tmp' in result2
@@ -436,7 +436,7 @@ class TestRenameTool:
         assert 'check_password' in result3 or 'error' not in result3.lower()
 
         # Step 4: verify original name is back
-        result4 = mcp_call(fresh_headless_server, 'get_funcs', {
+        result4 = mcp_call(fresh_headless_server, 'funcs', {
             'items': ['check_password'],
         })
         assert 'check_password' in result4
@@ -485,8 +485,8 @@ class TestElicitationFallback:
         if isinstance(data, list) and data:
             assert data[0].get('error') is None, f"Rename failed: {data[0].get('error')}"
 
-        # Step 2: Verify the rename took effect via get_funcs
-        result2 = mcp_call(fresh_headless_server, 'get_funcs', {
+        # Step 2: Verify the rename took effect via funcs
+        result2 = mcp_call(fresh_headless_server, 'funcs', {
             'items': ['elicit_test_renamed'],
         })
         assert 'elicit_test_renamed' in result2
@@ -569,7 +569,7 @@ class TestElicitationE2E:
 
                     # Verify rename took effect
                     with anyio.fail_after(MCP_CALL_TIMEOUT):
-                        result2 = await session.call_tool('get_funcs', {
+                        result2 = await session.call_tool('funcs', {
                             'items': ['elicit_accepted'],
                         })
                     assert not result2.isError
@@ -614,7 +614,7 @@ class TestElicitationE2E:
 
                     # Verify check_password still exists with original name
                     with anyio.fail_after(MCP_CALL_TIMEOUT):
-                        result2 = await session.call_tool('get_funcs', {
+                        result2 = await session.call_tool('funcs', {
                             'items': ['check_password'],
                         })
                     assert not result2.isError
@@ -807,8 +807,8 @@ class TestSetPrototypeTool:
         if check_addr is None:
             pytest.skip("check_password address not found")
 
-        # Step 1: get current signature via get_funcs
-        info = mcp_call(fresh_headless_server, 'get_funcs', {
+        # Step 1: get current signature via funcs
+        info = mcp_call(fresh_headless_server, 'funcs', {
             'items': ['check_password'],
         })
         data_info = parse_json_response(info)
@@ -826,7 +826,7 @@ class TestSetPrototypeTool:
             assert data[0].get('error') is None
 
         # Step 3: verify signature changed
-        after = mcp_call(fresh_headless_server, 'get_funcs', {
+        after = mcp_call(fresh_headless_server, 'funcs', {
             'items': ['check_password'],
         })
         assert 'check_password' in after
@@ -930,39 +930,62 @@ class TestTransactionTools:
 # ---------------------------------------------------------------------------
 
 class TestTypesTool:
-    """Tool: types — pattern?, offset?, limit?"""
+    """Tool: list(entry_type='type') — types are now accessed via the list tool."""
 
     def test_types_lists_builtin_types(self, headless_server):
-        """types() returns a non-empty list including primitive types."""
-        result = mcp_call(headless_server, 'types', {
+        """list(entry_type='type') returns a non-empty ListResult including primitive types."""
+        result_text = mcp_call(headless_server, 'list', {
+            'entry_type': 'type',
             'offset': 0,
             'limit': 50,
         })
-        assert len(result) > 0
+        parsed = parse_json_response(result_text)
+        assert parsed is not None
+        items = parsed.get('items', [])
+        assert len(items) > 0
         # Common primitive type names expected in Ghidra type system
-        assert any(prim in result for prim in ('int', 'char', 'void', 'byte', 'short'))
+        names = [item.get('name', '') for item in items]
+        assert any(prim in n for prim in ('int', 'char', 'void', 'byte', 'short') for n in names)
 
-    def test_types_with_pattern_filter(self, headless_server):
-        """types(pattern='int') returns int-related types."""
-        result = mcp_call(headless_server, 'types', {
-            'pattern': 'int',
+    def test_types_with_match_filter(self, headless_server):
+        """list(entry_type='type', match_filter='int') returns only int-related types."""
+        result_text = mcp_call(headless_server, 'list', {
+            'entry_type': 'type',
+            'match_filter': 'int',
             'offset': 0,
             'limit': 20,
         })
-        assert 'int' in result.lower()
+        parsed = parse_json_response(result_text)
+        assert parsed is not None, f"Expected JSON response, got: {result_text[:200]}"
+        items = parsed.get('items', [])
+        assert len(items) > 0, "Filter 'int' returned no items"
+        # Every returned item's name or path must contain the filter term
+        for item in items:
+            name = item.get('name', '') or ''
+            path = item.get('path', '') or ''
+            assert 'int' in name.lower() or 'int' in path.lower(), (
+                f"Item name={name!r} path={path!r} does not contain 'int' — filter not applied"
+            )
 
     def test_types_pagination(self, headless_server):
-        """types with offset pagination returns different results."""
-        result_page0 = mcp_call(headless_server, 'types', {
+        """list(entry_type='type') with offset pagination returns different results."""
+        result_page0 = mcp_call(headless_server, 'list', {
+            'entry_type': 'type',
             'offset': 0,
             'limit': 5,
         })
-        result_page1 = mcp_call(headless_server, 'types', {
+        result_page1 = mcp_call(headless_server, 'list', {
+            'entry_type': 'type',
             'offset': 5,
             'limit': 5,
         })
-        # Pages should be different (unless fewer than 5 types total, unlikely)
-        assert result_page0 != result_page1 or len(result_page0) == 0
+        # Pages should have different content (unless fewer than 5 types total)
+        parsed0 = parse_json_response(result_page0)
+        parsed1 = parse_json_response(result_page1)
+        if parsed0 and parsed1:
+            items0 = [item.get('name') for item in parsed0.get('items', [])]
+            items1 = [item.get('name') for item in parsed1.get('items', [])]
+            assert items0 != items1 or len(items0) == 0
 
 
 # ---------------------------------------------------------------------------

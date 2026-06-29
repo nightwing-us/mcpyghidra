@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from mcpyghidra.tools.analysis import decompile, disasm, symbols, xrefs
-from mcpyghidra.tools.core import get_funcs, list_entries
+from mcpyghidra.tools.core import funcs, list_entries
 from mcpyghidra.tools.modify import get_comment
 from tests.integration.helpers import assert_non_empty, assert_valid_address, run_async
 
@@ -158,17 +158,17 @@ class TestDisassembleAddr:
 
 
 class TestFindFunctionContaining:
-    """get_funcs(backend, [addr]) resolves function by address."""
+    """funcs(backend, [addr]) resolves function by address."""
 
     def test_find_function_containing_main_addr(self, backend):
         addr = _get_main_address(backend)
-        result = run_async(get_funcs, backend, [addr])[0]
+        result = run_async(funcs, backend, [addr])[0]
         assert result.get('error') is None, f'Unexpected error: {result.get("error")}'
         assert result['name'] == 'main', f'Expected function name "main", got: {result["name"]!r}'
 
     def test_find_function_containing_returns_function_info(self, backend):
         addr = _get_main_address(backend)
-        result = run_async(get_funcs, backend, [addr])[0]
+        result = run_async(funcs, backend, [addr])[0]
         assert result.get('error') is None
         assert 'name' in result
         assert 'entrypoint' in result
@@ -176,7 +176,7 @@ class TestFindFunctionContaining:
 
     def test_find_function_containing_check_password(self, backend):
         addr = _get_check_password_address(backend)
-        result = run_async(get_funcs, backend, [addr])[0]
+        result = run_async(funcs, backend, [addr])[0]
         assert result.get('error') is None
         assert result['name'] == 'check_password', (
             f'Expected "check_password", got: {result["name"]!r}'

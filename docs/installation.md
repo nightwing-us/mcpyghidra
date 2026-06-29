@@ -93,21 +93,21 @@ Or set it per-session:
 
 ```bash
 export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.0_PUBLIC
-mcpyghidra-headless --binary /path/to/firmware.elf
+mcpyghidra-headless /path/to/firmware.elf
 ```
 
 ### Windows (Command Prompt)
 
 ```cmd
 set GHIDRA_INSTALL_DIR=C:\path\to\ghidra_12.0_PUBLIC
-mcpyghidra-headless --binary C:\path\to\firmware.elf
+mcpyghidra-headless C:\path\to\firmware.elf
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
 $env:GHIDRA_INSTALL_DIR = "C:\path\to\ghidra_12.0_PUBLIC"
-mcpyghidra-headless --binary C:\path\to\firmware.elf
+mcpyghidra-headless C:\path\to\firmware.elf
 ```
 
 ## Verifying the Installation
@@ -118,7 +118,7 @@ Create a simple binary or use an existing one:
 
 ```bash
 export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.0_PUBLIC
-mcpyghidra-headless --binary /bin/ls
+mcpyghidra-headless /bin/ls
 ```
 
 You should see output like:

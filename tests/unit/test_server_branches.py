@@ -697,12 +697,12 @@ class TestMcpToolRegistrationDelegation:
 
         mock_fn.assert_awaited_once()
 
-    def test_get_funcs_delegates_to_core(self):
+    def test_funcs_delegates_to_core(self):
         reg, backend = self._make_tool_registration()
 
-        with patch('mcpyghidra.tools.core.get_funcs', new_callable=AsyncMock) as mock_fn:
+        with patch('mcpyghidra.tools.core.funcs', new_callable=AsyncMock) as mock_fn:
             mock_fn.return_value = []
-            _run_async(reg.get_funcs, items=['0x1000'])
+            _run_async(reg.funcs, items=['0x1000'])
 
         mock_fn.assert_awaited_once()
 
@@ -870,14 +870,12 @@ class TestMcpToolRegistrationDelegation:
 
         mock_fn.assert_awaited_once()
 
-    def test_types_delegates_to_type_tools(self):
+    def test_types_tool_removed_from_registration(self):
         reg, backend = self._make_tool_registration()
-
-        with patch('mcpyghidra.tools.types.types', new_callable=AsyncMock) as mock_fn:
-            mock_fn.return_value = []
-            _run_async(reg.types)
-
-        mock_fn.assert_awaited_once()
+        # types tool was removed; calling reg.types should raise AttributeError
+        assert not hasattr(reg, 'types'), 'types tool method should not exist on registration'
+        # type_info is still present
+        assert hasattr(reg, 'type_info')
 
     def test_type_info_delegates_to_type_tools(self):
         reg, backend = self._make_tool_registration()
@@ -1923,16 +1921,17 @@ class TestPassthroughResources:
         assert call_kwargs['entry_type'] == 'string'
         assert call_kwargs['match_filter'] == 'error'
 
-    def test_types_resource_delegates_to_type_tools(self):
+    def test_types_resource_delegates_to_list_types_result(self):
         backend = _make_backend()
         fn = _capture_resource(backend, 'ghidra://types/{offset}/{limit}')
         assert fn is not None
 
-        with patch('mcpyghidra.tools.types.types', new_callable=AsyncMock) as mock_types:
-            mock_types.return_value = MagicMock()
-            _run_async(fn, offset=0, limit=100)
+        # _res_types is synchronous (list_types_result is not async); call directly.
+        with patch('mcpyghidra.tools.types.list_types_result') as mock_ltr:
+            mock_ltr.return_value = MagicMock()
+            fn(offset=0, limit=100)
 
-        mock_types.assert_awaited_once_with(backend, offset=0, limit=100)
+        mock_ltr.assert_called_once_with(backend, 0, 100, '')
 
 
 # ---------------------------------------------------------------------------
