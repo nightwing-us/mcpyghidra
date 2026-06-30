@@ -1626,6 +1626,7 @@ class TestEntrypointsResource:
         result = fn()
 
         assert len(result) == 1
+        assert result[0]['addr'] == '0x401000'
         assert result[0]['name'] == 'entry'
 
     def test_entrypoints_symbol_none_uses_default_name(self):

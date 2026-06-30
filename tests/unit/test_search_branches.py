@@ -130,7 +130,7 @@ class TestFindBytesSyncHasMore:
         assert len(results) == 1
         result = results[0]
         assert result['has_more'] is True
-        assert len(result['matches']) == 5  # truncated to limit
+        assert len(result['items']) == 5  # truncated to limit
 
     def test_has_more_false_when_at_limit(self):
         """Exactly limit matches → has_more=False, no truncation."""
@@ -143,7 +143,7 @@ class TestFindBytesSyncHasMore:
             results = _find_bytes_sync(backend, ['90'], limit=5, offset=0)
 
         assert results[0]['has_more'] is False
-        assert len(results[0]['matches']) == 5
+        assert len(results[0]['items']) == 5
 
     def test_parse_error_captured_in_error_field(self):
         """parse_byte_pattern raising → error field is populated, matches is []."""
@@ -154,7 +154,7 @@ class TestFindBytesSyncHasMore:
 
         assert len(results) == 1
         assert results[0]['error'] is not None
-        assert results[0]['matches'] == []
+        assert results[0]['items'] == []
         assert results[0]['has_more'] is False
 
 
@@ -444,7 +444,7 @@ class TestFindInsnsSyncEdgeCases:
 
         assert len(results) == 1
         assert results[0]['error'] == 'boom'
-        assert results[0]['matches'] == []
+        assert results[0]['items'] == []
         assert results[0]['has_more'] is False
 
     def test_has_more_truncation_in_insns(self):
@@ -462,7 +462,7 @@ class TestFindInsnsSyncEdgeCases:
             )
 
         assert results[0]['has_more'] is True
-        assert len(results[0]['matches']) == 5
+        assert len(results[0]['items']) == 5
 
     def test_has_more_false_exactly_at_limit(self):
         """Exactly limit matches → has_more=False."""
@@ -479,7 +479,7 @@ class TestFindInsnsSyncEdgeCases:
             )
 
         assert results[0]['has_more'] is False
-        assert len(results[0]['matches']) == 5
+        assert len(results[0]['items']) == 5
 
 
 # ---------------------------------------------------------------------------

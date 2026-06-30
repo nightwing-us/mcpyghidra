@@ -86,9 +86,7 @@ class TestTypedXrefs:
         assert len(results) == 1
         r = results[0]
         assert r.get('error') is None, f'xrefs error: {r.get("error")}'
-        list_result = r.get('result')
-        assert list_result is not None
-        assert list_result.page_info.total_count >= 1, (
+        assert r['page_info']['total_count'] >= 1, (
             'Expected use_wrapper to be called from at least one location (main)'
         )
 
@@ -99,16 +97,14 @@ class TestTypedXrefs:
         assert len(results) == 1
         r = results[0]
         assert r.get('error') is None, f'xrefs error: {r.get("error")}'
-        list_result = r.get('result')
-        assert list_result is not None
         # sum_point should be called from at least one location (use_wrapper)
-        assert list_result.page_info.total_count >= 1, (
+        assert r['page_info']['total_count'] >= 1, (
             'Expected sum_point to be called from at least one location (use_wrapper)'
         )
         # The caller should be use_wrapper
         callers = [
             item.get('from', {}).get('function', '')
-            for item in list_result.items
+            for item in r['items']
         ]
         assert any('use_wrapper' in c for c in callers), (
             f'Expected use_wrapper to appear as a caller of sum_point, got callers: {callers}'

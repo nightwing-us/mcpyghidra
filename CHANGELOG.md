@@ -6,6 +6,53 @@ format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-06-29
+
+Tool-contract standardization: every agent-facing batched tool now emits the same
+JSON key vocabulary as the sibling MCPyIDA server, so one automated-agent calling
+convention works against either backend. **This is a breaking change to the tool
+input/output contract** (pre-1.0; no compatibility aliases on outputs).
+
+### Changed
+
+- **One address key — `addr`.** `list` items expose their address under `addr`
+  (was `address`); memory-segment items keep `start`/`end`.
+- **One rows key — `items`.** `find_bytes` and `find_insns` expose result rows
+  under `items` (was `matches`).
+- **`xrefs` aligned with its sibling tools.** Input accepts `addr`/`name` (plus
+  the aliases `target`/`ea`/`function`) instead of `target`-only; output is a
+  flat per-item dict with references under `items` and the pagination/summary
+  fields lifted up — the `result` wrapper is gone. Each item echoes the resolved
+  `addr`, the `name` (when supplied), and `direction`.
+- **`update_vars` returns a structured result** (`{function, addr, results[],
+  error}`) instead of a prose status string — mirrors MCPyIDA. Each `results[]`
+  item is `{var, new_name, new_type, error}`; per-variable failures are reported
+  per item (one bad variable no longer fails the others), while function-level
+  failures (function not found, no variables) set the top-level `error`.
+- **`begin_trans`/`end_trans` return structured dicts** instead of strings:
+  `{transaction_id, message, error}` and `{transaction_id, committed, message,
+  error}`.
+
+### Added
+
+- **A top-level `error` on every batched item.** `type_info` success items now
+  carry `error: null`; `add_field` items now include `error` (alongside the
+  existing `success`/`message`). `StructureCreationResult` (from `create_struct`)
+  also gains an additive `error` key, so every result model carries it.
+- **A tool-contract conformance test** asserting the shared key vocabulary across
+  the batched tools, so the surface cannot silently drift again.
+
+### Fixed
+
+- The `ghidra://program/entrypoints` resource emitted its address under
+  `address`; it now uses `addr` like the rest of the surface.
+
+### Unchanged (frozen external schemas)
+
+- The CFG/callgraph subsystem (`BasicBlock.address`, cfg `instructions[].address`,
+  the `cfg`/`callgraph` input parameter) and `FunctionInfo.entrypoint` are
+  deliberately left as-is — typed schemas external tooling depends on.
+
 ## [0.7.2] — 2026-06-26
 
 Tool ergonomics for smaller LLM clients (single-or-batch calls), a simpler tool
@@ -135,7 +182,8 @@ globals and are unaffected.
 
 First public release.
 
-[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightwing-us/mcpyghidra/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightwing-us/mcpyghidra/compare/v0.6.0...v0.7.0

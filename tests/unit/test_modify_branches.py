@@ -287,12 +287,16 @@ class TestSetCommentsInvalidKind:
 
 
 class TestUpdateVarsSyncNoVars:
-    def test_empty_dict_returns_error_string(self):
+    def test_empty_dict_returns_error_dict(self):
         backend = _make_backend()
         from mcpyghidra.tools.modify import _update_vars_sync
         result = _update_vars_sync(backend, 'some_func', {})
-        assert 'ERROR' in result
-        assert 'No variables' in result
+        assert isinstance(result, dict)
+        assert result['error'] is not None
+        assert 'No variables' in result['error']
+        assert result['results'] == []
+        assert result['addr'] is None
+        assert result['function'] == 'some_func'
 
 
 # ---------------------------------------------------------------------------
@@ -301,17 +305,22 @@ class TestUpdateVarsSyncNoVars:
 
 
 class TestUpdateVarsSyncCollision:
-    def test_collision_appends_already_exists_message(self):
-        """If new_name already exists as a symbol, status contains 'already exists'."""
+    def test_collision_produces_per_var_error(self):
+        """If new_name already exists AND old var also exists, per-var error 'already exists'."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_dec_func = MagicMock()
+        mock_ghidra_var = MagicMock()
+        mock_ghidra_var.name = 'local_8'
         mock_existing_var = MagicMock()
         mock_existing_var.name = 'buffer'
 
-        # get_symbol returns: None for 'local_8' (old name), mock for 'buffer' (new name)
+        # get_symbol: old name 'local_8' found, new name 'buffer' also found → collision
         def _get_symbol_side_effect(sym_name):
+            if sym_name == 'local_8':
+                return mock_ghidra_var
             if sym_name == 'buffer':
                 return mock_existing_var
             return None
@@ -327,7 +336,26 @@ class TestUpdateVarsSyncCollision:
                 {'local_8': {'new_name': 'buffer'}},
             )
 
-        assert 'already exists' in result
+        assert result['error'] is None  # function-level ok
+        assert "already exists" in result['results'][0]['error']
+        assert result['results'][0]['var'] == 'local_8'
+
+    def test_decompile_failure_is_function_level_error(self):
+        """Function resolves but won't decompile → function-level error, empty results, null addr."""
+        backend = _make_backend()
+        mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
+        backend.get_decompiled_func.side_effect = RuntimeError('decompiler exploded')
+
+        with patch('mcpyghidra.tools.modify._get_function', return_value=mock_func):
+            from mcpyghidra.tools.modify import _update_vars_sync
+            result = _update_vars_sync(backend, 'main', {'local_8': {'new_name': 'buffer'}})
+
+        assert result['error'] is not None
+        assert 'decompiler exploded' in result['error']
+        assert result['results'] == []
+        assert result['addr'] is None
+        assert result['function'] == 'main'
 
 
 # ---------------------------------------------------------------------------
@@ -474,13 +502,14 @@ class TestPatchHexParsingError:
 
 
 class TestUpdateVarsAsync:
-    def test_async_empty_vars_returns_error_string(self):
-        """update_vars() with empty dict should return error string (not raise)."""
+    def test_async_empty_vars_returns_error_dict(self):
+        """update_vars() with empty dict should return error dict (not raise)."""
         backend = _make_backend()
         from mcpyghidra.tools.modify import update_vars
         result = _run_async(update_vars, backend, 'some_func', {})
-        assert isinstance(result, str)
-        assert 'ERROR' in result
+        assert isinstance(result, dict)
+        assert result['error'] is not None
+        assert 'No variables' in result['error']
 
 
 # ---------------------------------------------------------------------------
@@ -602,10 +631,11 @@ class TestSetPrototypeMissingFields:
 
 class TestUpdateVarsSyncNeitherNameNorType:
     def test_neither_new_name_nor_new_type_appends_error_status(self):
-        """If entry has neither new_name nor new_type, status contains ERROR message."""
+        """If entry has neither new_name nor new_type, per-var error set."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_dec_func = MagicMock()
         mock_dec_func.get_symbol.return_value = None
 
@@ -619,7 +649,8 @@ class TestUpdateVarsSyncNeitherNameNorType:
                 {'local_4': {}},  # no new_name, no new_type
             )
 
-        assert 'at least one of new_name or new_type is required' in result
+        assert result['error'] is None  # function-level ok
+        assert 'at least one of new_name or new_type is required' in result['results'][0]['error']
 
 
 # ---------------------------------------------------------------------------
@@ -628,11 +659,12 @@ class TestUpdateVarsSyncNeitherNameNorType:
 
 
 class TestUpdateVarsSyncSuccessPath:
-    def test_successful_rename_appends_done(self):
-        """When ghidra_var found and no collision, status contains 'Done'."""
+    def test_successful_rename_returns_dict_no_error(self):
+        """When ghidra_var found and no collision, result dict has no errors."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_ghidra_var = MagicMock()
         mock_ghidra_var.name = 'local_8'
 
@@ -656,13 +688,17 @@ class TestUpdateVarsSyncSuccessPath:
                     {'local_8': {'new_name': 'counter'}},
                 )
 
-        assert 'Done' in result
+        assert result['error'] is None  # function-level ok
+        assert result['results'][0]['error'] is None  # per-var ok
+        assert result['results'][0]['var'] == 'local_8'
+        assert result['results'][0]['new_name'] == 'counter'
 
     def test_type_only_update_uses_original_name(self):
         """When only new_type given (no new_name), effective_name = ghidra_var.name."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_ghidra_var = MagicMock()
         mock_ghidra_var.name = 'param_1'
 
@@ -685,13 +721,16 @@ class TestUpdateVarsSyncSuccessPath:
                     {'param_1': {'new_type': 'char *'}},
                 )
 
-        assert 'Done' in result
+        assert result['error'] is None
+        assert result['results'][0]['error'] is None
+        assert result['results'][0]['new_type'] == 'char *'
 
-    def test_update_exception_appends_error_status(self):
-        """When ghidra_var.update() raises, status contains ERROR."""
+    def test_update_exception_sets_per_var_error(self):
+        """When ghidra_var.update() raises, per-var error set; function-level error is None."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_ghidra_var = MagicMock()
         mock_ghidra_var.name = 'local_8'
         mock_ghidra_var.update.side_effect = RuntimeError('update failed')
@@ -715,7 +754,9 @@ class TestUpdateVarsSyncSuccessPath:
                     {'local_8': {'new_name': 'counter'}},
                 )
 
-        assert 'ERROR' in result
+        assert result['error'] is None  # function-level ok
+        assert result['results'][0]['error'] is not None
+        assert 'update failed' in result['results'][0]['error']
 
 
 # ---------------------------------------------------------------------------
@@ -724,11 +765,12 @@ class TestUpdateVarsSyncSuccessPath:
 
 
 class TestUpdateVarsSyncVarNotFound:
-    def test_var_not_found_appends_already_exists_fallback(self):
-        """When ghidra_var is None and existing_var is None, falls to else branch."""
+    def test_var_not_found_sets_per_var_error(self):
+        """When ghidra_var is None (var doesn't exist), per-var error is 'Variable not found'."""
         backend = _make_backend()
 
         mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value.offset = 0x1000
         mock_dec_func = MagicMock()
         # Both old name and new name lookups return None
         mock_dec_func.get_symbol.return_value = None
@@ -742,8 +784,10 @@ class TestUpdateVarsSyncVarNotFound:
                 {'missing_var': {'new_name': 'new_name_here'}},
             )
 
-        # ghidra_var is None → else branch → "already exists" message
-        assert 'already exists' in result
+        # ghidra_var is None → "Variable not found in function 'main'"
+        assert result['error'] is None  # function-level ok
+        assert 'Variable not found' in result['results'][0]['error']
+        assert 'main' in result['results'][0]['error']
 
 
 # ---------------------------------------------------------------------------
@@ -819,21 +863,45 @@ class TestGetComment:
 
 
 class TestBeginEndTrans:
-    def test_begin_trans_returns_started_message(self):
+    def test_begin_trans_returns_dict_with_transaction_id(self):
         backend = _make_backend()
         backend.program.startTransaction.return_value = 42
 
         from mcpyghidra.tools.modify import begin_trans
         result = _run_async(begin_trans, backend, 'my transaction')
 
-        assert '42' in result
-        assert 'Transaction started' in result
+        assert isinstance(result, dict)
+        assert result['transaction_id'] == 42
+        assert result['error'] is None
+        assert 'message' in result
 
-    def test_end_trans_returns_ended_message(self):
+    def test_end_trans_returns_dict_with_committed(self):
         backend = _make_backend()
 
         from mcpyghidra.tools.modify import end_trans
         result = _run_async(end_trans, backend, 7, commit=True)
 
-        assert '7' in result
-        assert 'ended' in result
+        assert isinstance(result, dict)
+        assert result['transaction_id'] == 7
+        assert result['committed'] is True
+        assert result['error'] is None
+
+    def test_end_trans_rollback_committed_false(self):
+        backend = _make_backend()
+
+        from mcpyghidra.tools.modify import end_trans
+        result = _run_async(end_trans, backend, 99, commit=False)
+
+        assert result['committed'] is False
+        assert result['error'] is None
+
+    def test_begin_trans_exception_sets_error(self):
+        backend = _make_backend()
+        backend.program.startTransaction.side_effect = RuntimeError('tx failed')
+
+        from mcpyghidra.tools.modify import begin_trans
+        result = _run_async(begin_trans, backend, 'failing tx')
+
+        assert result['error'] is not None
+        assert 'tx failed' in result['error']
+        assert result['transaction_id'] is None

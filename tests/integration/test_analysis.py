@@ -18,7 +18,7 @@ def _get_main_address(backend) -> str:
     result = run_async(list_entries, backend, entry_type='function', offset=0, limit=500, match_filter='main')
     for item in result.items:
         if item['name'] == 'main':
-            return item['address']
+            return item['addr']
     pytest.fail(f'Could not find "main" in function list: {[i["name"] for i in result.items]}')
 
 
@@ -27,7 +27,7 @@ def _get_check_password_address(backend) -> str:
     result = run_async(list_entries, backend, entry_type='function', offset=0, limit=500, match_filter='check_password')
     for item in result.items:
         if item['name'] == 'check_password':
-            return item['address']
+            return item['addr']
     pytest.fail(
         f'Could not find "check_password" in function list: {[i["name"] for i in result.items]}'
     )
@@ -218,35 +218,33 @@ class TestGetSymbol:
 
 
 class TestFindXrefsToAddr:
-    """xrefs(backend, [{'target': addr, 'direction': 'to'}])[0]['result'] -> ListResult."""
+    """xrefs(backend, [{'addr': addr, 'direction': 'to'}])[0] -> flat dict with 'items'."""
 
     def test_find_xrefs_to_check_password(self, backend):
         """check_password is called from main — xrefs list should be non-empty."""
         addr = _get_check_password_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to'}])[0]
         assert result['error'] is None, f'Unexpected error: {result["error"]}'
-        list_result = result['result']
-        assert list_result is not None
-        assert isinstance(list_result.items, list)
-        assert len(list_result.items) > 0, (
+        assert isinstance(result['items'], list)
+        assert len(result['items']) > 0, (
             'Expected at least one xref to check_password (called from main)'
         )
 
     def test_xrefs_items_have_from_key(self, backend):
         addr = _get_check_password_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to'}])[0]
         assert result['error'] is None
-        for item in result['result'].items:
+        for item in result['items']:
             assert isinstance(item, dict)
             assert 'from' in item, f'Xref item missing "from" key: {item!r}'
 
     def test_xrefs_from_main_calls_check_password(self, backend):
         """The xref from main to check_password should identify main as the caller."""
         addr = _get_check_password_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to'}])[0]
         assert result['error'] is None
         caller_funcs = []
-        for item in result['result'].items:
+        for item in result['items']:
             from_info = item.get('from', {})
             if isinstance(from_info, dict) and 'function' in from_info:
                 caller_funcs.append(from_info['function'])
@@ -256,83 +254,84 @@ class TestFindXrefsToAddr:
 
     def test_xrefs_has_page_info(self, backend):
         addr = _get_check_password_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to'}])[0]
         assert result['error'] is None
-        list_result = result['result']
-        assert list_result.page_info is not None
-        assert list_result.page_info.total_count >= 0
+        assert result['page_info'] is not None
+        assert result['page_info']['total_count'] >= 0
 
     def test_xrefs_pagination(self, backend):
         """limit=1 should return at most 1 item."""
         addr = _get_check_password_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'to', 'limit': 1}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to', 'limit': 1}])[0]
         assert result['error'] is None
-        assert len(result['result'].items) <= 1
+        assert len(result['items']) <= 1
+
+    def test_xrefs_summary_present(self, backend):
+        """Flat output includes 'summary' field."""
+        addr = _get_check_password_address(backend)
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'to'}])[0]
+        assert result['error'] is None
+        assert 'summary' in result
 
 
 class TestFindXrefsFromAddr:
-    """xrefs(backend, [{'target': addr, 'direction': 'from'}])[0]['result'] -> ListResult."""
+    """xrefs(backend, [{'addr': addr, 'direction': 'from'}])[0] -> flat dict with 'items'."""
 
     def test_find_xrefs_from_main(self, backend):
         """main calls check_password — outgoing xrefs should be non-empty."""
         addr = _get_main_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'from'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'from'}])[0]
         assert result['error'] is None, f'Unexpected error: {result["error"]}'
-        list_result = result['result']
-        assert list_result is not None
-        assert isinstance(list_result.items, list)
+        assert isinstance(result['items'], list)
 
     def test_xrefs_from_items_have_to_key(self, backend):
         addr = _get_main_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'from'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'from'}])[0]
         assert result['error'] is None
-        for item in result['result'].items:
+        for item in result['items']:
             assert isinstance(item, dict)
             assert 'to' in item, f'Xref-from item missing "to" key: {item!r}'
 
     def test_xrefs_from_has_page_info(self, backend):
         addr = _get_main_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'from'}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'from'}])[0]
         assert result['error'] is None
-        list_result = result['result']
-        assert list_result.page_info is not None
-        assert list_result.page_info.total_count >= 0
+        assert result['page_info'] is not None
+        assert result['page_info']['total_count'] >= 0
 
     def test_xrefs_from_pagination_limit(self, backend):
         """limit=1 should return at most 1 item."""
         addr = _get_main_address(backend)
-        result = run_async(xrefs, backend, [{'target': addr, 'direction': 'from', 'limit': 1}])[0]
+        result = run_async(xrefs, backend, [{'addr': addr, 'direction': 'from', 'limit': 1}])[0]
         assert result['error'] is None
-        assert len(result['result'].items) <= 1
+        assert len(result['items']) <= 1
 
 
 class TestFindXrefsToFunc:
-    """xrefs with function name target (not 0x prefix) → resolves via name."""
+    """xrefs with function name (not 0x prefix) → resolves via name, returns flat dict."""
 
     def test_find_xrefs_to_check_password_by_name(self, backend):
         """check_password is called from main — xrefs should be non-empty."""
-        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to'}])[0]
         assert result['error'] is None, f'Unexpected error: {result["error"]}'
-        list_result = result['result']
-        assert list_result is not None
-        assert isinstance(list_result.items, list)
-        assert len(list_result.items) > 0, (
+        assert isinstance(result['items'], list)
+        assert len(result['items']) > 0, (
             'Expected at least one xref to check_password (called from main)'
         )
 
     def test_xrefs_to_func_items_have_from_key(self, backend):
-        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to'}])[0]
         assert result['error'] is None
-        for item in result['result'].items:
+        for item in result['items']:
             assert isinstance(item, dict)
             assert 'from' in item, f'Xref item missing "from" key: {item!r}'
 
     def test_xrefs_to_func_caller_is_main(self, backend):
         """The caller of check_password should include main."""
-        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to'}])[0]
         assert result['error'] is None
         caller_funcs = []
-        for item in result['result'].items:
+        for item in result['items']:
             from_info = item.get('from', {})
             if isinstance(from_info, dict) and 'function' in from_info:
                 caller_funcs.append(from_info['function'])
@@ -341,17 +340,29 @@ class TestFindXrefsToFunc:
         )
 
     def test_xrefs_to_func_has_page_info(self, backend):
-        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to'}])[0]
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to'}])[0]
         assert result['error'] is None
-        list_result = result['result']
-        assert list_result.page_info is not None
-        assert list_result.page_info.total_count >= 0
+        assert result['page_info'] is not None
+        assert result['page_info']['total_count'] >= 0
 
     def test_xrefs_to_func_pagination_limit(self, backend):
         """limit=1 should return at most 1 item."""
-        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to', 'limit': 1}])[0]
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to', 'limit': 1}])[0]
         assert result['error'] is None
-        assert len(result['result'].items) <= 1
+        assert len(result['items']) <= 1
+
+    def test_xrefs_to_func_name_echoed(self, backend):
+        """'name' is echoed in the flat result dict."""
+        result = run_async(xrefs, backend, [{'name': 'check_password', 'direction': 'to'}])[0]
+        assert result['error'] is None
+        assert result['name'] == 'check_password'
+
+    def test_target_alias_still_accepted(self, backend):
+        """Legacy 'target' key (non-0x) still resolves as function name."""
+        result = run_async(xrefs, backend, [{'target': 'check_password', 'direction': 'to'}])[0]
+        assert result['error'] is None, f'Unexpected error: {result["error"]}'
+        assert isinstance(result['items'], list)
+        assert len(result['items']) > 0
 
 
 class TestGetFunctionComment:

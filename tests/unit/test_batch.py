@@ -196,7 +196,7 @@ class TestBatchReturnShapes:
                 assert r['addr'] == '0x1000'
 
     def test_xrefs_success_shape(self):
-        """xrefs success result has: target, direction, result (ListResult), error=None."""
+        """xrefs success result is flat: addr, direction, items, page_info, error=None."""
         backend = _make_backend()
         mock_ea = MagicMock()
         mock_ea.offset = 0x1000
@@ -220,6 +220,7 @@ class TestBatchReturnShapes:
                 assert len(results) == 1
                 r = results[0]
                 assert r['error'] is None
-                assert r['target'] == '0x1000'
+                assert r['addr'] == '0x1000'    # resolved addr echoed (not 'target')
                 assert r['direction'] == 'to'
-                assert 'result' in r
+                assert 'items' in r             # flat: rows under 'items', not 'result'
+                assert 'result' not in r        # no wrapper

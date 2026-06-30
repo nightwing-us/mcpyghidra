@@ -53,14 +53,14 @@ def _find_bytes_sync(
 
             results.append({
                 'pattern': pattern_str,
-                'matches': matches,
+                'items': matches,
                 'has_more': has_more,
                 'error': None,
             })
         except Exception as e:
             results.append({
                 'pattern': pattern_str,
-                'matches': [],
+                'items': [],
                 'has_more': False,
                 'error': str(e),
             })
@@ -170,14 +170,14 @@ def _find_insns_sync(
 
             results.append({
                 'sequence': sequence,
-                'matches': matches,
+                'items': matches,
                 'has_more': has_more,
                 'error': None,
             })
         except Exception as e:
             results.append({
                 'sequence': sequence,
-                'matches': [],
+                'items': [],
                 'has_more': False,
                 'error': str(e),
             })

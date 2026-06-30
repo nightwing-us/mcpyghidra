@@ -367,7 +367,9 @@ def _type_info_sync(backend: GhidraBackend, items: list[str]) -> list[dict]:
             if data_type is None:
                 raise ToolError(f"Type '{type_name}' not found")
             details = _get_type_details(data_type)
-            results.append(details.model_dump())
+            out = details.model_dump()
+            out['error'] = None
+            results.append(out)
         except Exception as e:
             results.append({'target': type_name, 'error': str(e)})
     return results

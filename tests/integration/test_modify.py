@@ -26,7 +26,7 @@ def _get_check_password_address(backend) -> str:
     )
     for item in result.items:
         if item['name'] == 'check_password':
-            return item['address']
+            return item['addr']
     pytest.fail(
         f'Could not find "check_password" in function list: '
         f'{[i["name"] for i in result.items]}'
@@ -40,7 +40,7 @@ def _get_main_address(backend) -> str:
     )
     for item in result.items:
         if item['name'] == 'main':
-            return item['address']
+            return item['addr']
     pytest.fail(
         f'Could not find "main" in function list: '
         f'{[i["name"] for i in result.items]}'

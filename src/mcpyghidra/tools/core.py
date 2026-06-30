@@ -286,7 +286,7 @@ def _list_functions(
         return {
             'type': 'function',
             'name': func.getName(),
-            'address': f'{func.getEntryPoint().offset:#x}',
+            'addr': f'{func.getEntryPoint().offset:#x}',
         }
 
     match_info = f" matching '{match_filter}'" if match_filter else ''
@@ -344,7 +344,7 @@ def _list_imports(
         return {
             'type': 'import',
             'name': entry.name,
-            'address': f'{entry.address.offset:#x}',
+            'addr': f'{entry.address.offset:#x}',
             'symbol_type': str(entry.getSymbolType()),
         }
 
@@ -369,7 +369,7 @@ def _list_exports(
         return {
             'type': 'export',
             'name': entry.name,
-            'address': f'{entry.address.offset:#x}',
+            'addr': f'{entry.address.offset:#x}',
             'symbol_type': str(entry.getSymbolType()),
         }
 
@@ -408,7 +408,7 @@ def _list_strings(
         return {
             'type': 'string',
             'value': repr(value),
-            'address': f'{entry.getAddress().offset:#x}',
+            'addr': f'{entry.getAddress().offset:#x}',
         }
 
     matching_info = f' matching {repr(match_filter)}' if match_filter else ''
@@ -433,7 +433,7 @@ def _list_classes(
         return {
             'type': 'class',
             'name': entry.getName(True),
-            'address': f'{entry.getAddress().offset:#x}',
+            'addr': f'{entry.getAddress().offset:#x}',
             'symbol_type': str(entry.getSymbolType()),
         }
 
@@ -461,7 +461,7 @@ def _list_namespaces(
         return {
             'type': 'namespace',
             'name': entry.name,
-            'address': f'{entry.address.offset:#x}',
+            'addr': f'{entry.address.offset:#x}',
             'symbol_type': str(entry.getSymbolType()),
         }
 

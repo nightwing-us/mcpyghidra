@@ -827,7 +827,8 @@ class TestTypeInfoSync:
         backend = _make_backend()
         backend.get_data_type_managers.return_value = [dtm]
         results = _type_info_sync(backend, ['MyType'])
-        assert results[0].get('error') is None
+        assert 'error' in results[0]  # explicit key, not just absent
+        assert results[0]['error'] is None
         assert results[0]['name'] == 'MyType'
 
 

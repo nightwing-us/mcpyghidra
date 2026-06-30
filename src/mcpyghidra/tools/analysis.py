@@ -416,17 +416,20 @@ def _xrefs_from_addr(
 async def xrefs(backend: GhidraBackend, items: list[dict]) -> list[dict]:
     """Cross-references. MERGED from find_xrefs_to_addr + find_xrefs_from_addr + find_xrefs_to_func.
 
-    Each item in ``items`` is a dict with keys:
-    - target: hex address string (e.g. '0x401000') OR function name string
-      Auto-detection: starts with '0x' → address, otherwise → function name resolved to entry point
+    Each item in ``items`` is a dict with:
+    - addr: hex address string (e.g. '0x401000'), OR
+    - name: function name string
+      (aliases accepted: target/ea/function — '0x'-prefixed → address, else name)
     - direction: 'to' (default) or 'from'
     - offset: pagination start (default 0)
     - limit: max results per item (default 500)
 
-    RETURNS: list of dicts, each with:
-    - target: input target value
+    RETURNS: list of FLAT dicts, each with:
+    - addr: resolved function/entry address (hex)
+    - name: echoed when a name was provided
     - direction: 'to' or 'from'
-    - result: ListResult (on success)
+    - items: cross-reference rows (same shape as `list` items); plus summary,
+      page_info, entry_type, schema_version
     - error: null on success, error message string on failure"""
     if not isinstance(items, list):
         items = [items]
@@ -437,36 +440,46 @@ def _xrefs_sync(backend: GhidraBackend, items: list[dict]) -> list[dict]:
     """Sync implementation — runs in thread pool."""
     results: list[dict] = []
     for item in items:
-        target: str = item.get('target', '') or ''
+        # Accept addr/name plus legacy aliases target/ea/function.
+        addr_in: str = (item.get('addr') or '').strip()
+        name_in: str = (item.get('name') or '').strip()
+        if not addr_in and not name_in:
+            alias = (
+                item.get('target') or item.get('ea') or item.get('function') or ''
+            ).strip()
+            if alias[:2].lower() == '0x':
+                addr_in = alias
+            elif alias:
+                name_in = alias
+
         direction: str = item.get('direction', 'to') or 'to'
         item_offset: int = int(item.get('offset', 0) or 0)
         item_limit: int = int(item.get('limit', 500) or 500)
 
+        # Echo of the addressing the caller supplied (used on errors).
+        err_echo: dict = {'direction': direction}
+        if addr_in:
+            err_echo['addr'] = addr_in
+        if name_in:
+            err_echo['name'] = name_in
+
         if item_offset < 0:
-            results.append({
-                'target': target,
-                'direction': direction,
-                'error': 'offset must be non-negative',
-            })
+            results.append({**err_echo, 'error': 'offset must be non-negative'})
             continue
         if item_limit <= 0:
-            results.append({
-                'target': target,
-                'direction': direction,
-                'error': 'limit must be positive',
-            })
+            results.append({**err_echo, 'error': 'limit must be positive'})
             continue
 
         try:
-            # Auto-detect: 0x prefix → address, otherwise → function name
-            if target.startswith('0x') or target.startswith('0X'):
-                ea = _get_address(backend, target)
-            else:
-                # Resolve function name to entry point via flat_api (O(1) hash lookup)
-                matched_func = backend.flat_api.getFunction(target)
+            if addr_in:
+                ea = _get_address(backend, addr_in)
+            elif name_in:
+                matched_func = backend.flat_api.getFunction(name_in)
                 if matched_func is None:
-                    raise GhidraError(f'Function {target!r} not found')
+                    raise GhidraError(f'Function {name_in!r} not found')
                 ea = matched_func.getEntryPoint()
+            else:
+                raise GhidraError('Either addr or name must be provided')
 
             if direction == 'to':
                 list_result = _xrefs_to_addr(backend, ea, item_offset, item_limit)
@@ -477,12 +490,17 @@ def _xrefs_sync(backend: GhidraBackend, items: list[dict]) -> list[dict]:
                     f"direction must be 'to' or 'from', got {direction!r}"
                 )
 
-            results.append({
-                'target': target,
+            # Flat per-item dict: echo context + lifted ListResult fields
+            # (summary, entry_type, schema_version, page_info, items). No wrapper.
+            flat: dict = {
                 'direction': direction,
-                'result': list_result,
+                'addr': f'{ea.offset:#x}',
                 'error': None,
-            })
+            }
+            if name_in:
+                flat['name'] = name_in
+            flat.update(list_result.model_dump())
+            results.append(flat)
         except Exception as e:
-            results.append({'target': target, 'direction': direction, 'error': str(e)})
+            results.append({**err_echo, 'error': str(e)})
     return results

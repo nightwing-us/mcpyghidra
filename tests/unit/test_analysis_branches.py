@@ -1099,3 +1099,138 @@ class TestDisasmFunction:
         # Should have 'MOV EAX, EBX' but no ';' and empty byte column
         assert 'MOV EAX, EBX' in result
         assert '; ' not in result
+
+
+# ---------------------------------------------------------------------------
+# Branch: xrefs flat contract — addr/name (+aliases), no 'result' wrapper
+# ---------------------------------------------------------------------------
+
+
+class TestXrefsFlatContract:
+    """xrefs returns a flat per-item dict: rows under 'items', no 'result' wrapper,
+    addr/name/direction echoed, error present. Input accepts addr/name + aliases."""
+
+    def _patch_xrefs(self, monkeypatch, list_result):
+        """Stub _xrefs_to_addr/_xrefs_from_addr to return a ListResult."""
+        import mcpyghidra.tools.analysis as analysis
+        monkeypatch.setattr(analysis, '_xrefs_to_addr', lambda *a, **k: list_result)
+        monkeypatch.setattr(analysis, '_xrefs_from_addr', lambda *a, **k: list_result)
+
+    def test_success_is_flat_with_items_no_result_wrapper(self, monkeypatch):
+        """Successful xref returns flat dict: 'items' lifted, no 'result' wrapper."""
+        from mcpyghidra.models import ListResult, ResultPageInfo
+        import mcpyghidra.tools.analysis as analysis
+
+        lr = ListResult(
+            summary='Cross-references to 0x1000 0-0 of 1',
+            entry_type='cross-reference', schema_version=1,
+            page_info=ResultPageInfo(offset=0, limit=500, num_returned=1,
+                                     total_count=1, has_more=False, next_offset=None),
+            items=[{'type': 'Cross-Reference to Address', 'from': {'addr': '0x2000'}}],
+        )
+        self._patch_xrefs(monkeypatch, lr)
+        backend = _make_backend()
+        backend.program.getAddressFactory.return_value.getAddress.return_value = _make_mock_addr(0x1000)
+
+        out = analysis._xrefs_sync(backend, [{'addr': '0x1000', 'direction': 'to'}])
+        item = out[0]
+
+        assert 'result' not in item            # wrapper dropped
+        assert item['items'] == lr.items       # rows lifted under 'items'
+        assert item['error'] is None
+        assert item['direction'] == 'to'
+        assert item['addr']                    # resolved addr echoed
+        assert 'page_info' in item             # ListResult fields lifted
+
+    def test_target_alias_still_accepted(self, monkeypatch):
+        """'target' key (legacy alias) is accepted and resolves correctly."""
+        from mcpyghidra.models import ListResult, ResultPageInfo
+        import mcpyghidra.tools.analysis as analysis
+
+        lr = ListResult(
+            summary='s', entry_type='cross-reference', schema_version=1,
+            page_info=ResultPageInfo(offset=0, limit=500, num_returned=0,
+                                     total_count=0, has_more=False, next_offset=None),
+            items=[],
+        )
+        self._patch_xrefs(monkeypatch, lr)
+        backend = _make_backend()
+        backend.program.getAddressFactory.return_value.getAddress.return_value = _make_mock_addr(0x1000)
+
+        out = analysis._xrefs_sync(backend, [{'target': '0x1000'}])  # legacy alias
+        assert out[0]['error'] is None
+        assert out[0]['items'] == []
+
+    def test_ea_alias_accepted(self, monkeypatch):
+        """'ea' key is accepted as an alias for addr."""
+        from mcpyghidra.models import ListResult, ResultPageInfo
+        import mcpyghidra.tools.analysis as analysis
+
+        lr = ListResult(
+            summary='s', entry_type='cross-reference', schema_version=1,
+            page_info=ResultPageInfo(offset=0, limit=500, num_returned=0,
+                                     total_count=0, has_more=False, next_offset=None),
+            items=[],
+        )
+        self._patch_xrefs(monkeypatch, lr)
+        backend = _make_backend()
+        backend.program.getAddressFactory.return_value.getAddress.return_value = _make_mock_addr(0x2000)
+
+        out = analysis._xrefs_sync(backend, [{'ea': '0x2000', 'direction': 'from'}])
+        assert out[0]['error'] is None
+        assert out[0]['direction'] == 'from'
+
+    def test_function_alias_accepted(self, monkeypatch):
+        """'function' key is accepted as an alias for addr (hex) or name (plain)."""
+        from mcpyghidra.models import ListResult, ResultPageInfo
+        import mcpyghidra.tools.analysis as analysis
+
+        lr = ListResult(
+            summary='s', entry_type='cross-reference', schema_version=1,
+            page_info=ResultPageInfo(offset=0, limit=500, num_returned=0,
+                                     total_count=0, has_more=False, next_offset=None),
+            items=[],
+        )
+        self._patch_xrefs(monkeypatch, lr)
+        backend = _make_backend()
+        backend.program.getAddressFactory.return_value.getAddress.return_value = _make_mock_addr(0x1000)
+
+        out = analysis._xrefs_sync(backend, [{'function': '0x1000', 'direction': 'from'}])
+        assert out[0]['error'] is None
+        assert out[0]['direction'] == 'from'
+        assert out[0]['items'] == []
+
+    def test_name_key_echoed_in_output(self, monkeypatch):
+        """When 'name' is provided, it is echoed in the output dict."""
+        from mcpyghidra.models import ListResult, ResultPageInfo
+        import mcpyghidra.tools.analysis as analysis
+
+        lr = ListResult(
+            summary='s', entry_type='cross-reference', schema_version=1,
+            page_info=ResultPageInfo(offset=0, limit=500, num_returned=0,
+                                     total_count=0, has_more=False, next_offset=None),
+            items=[],
+        )
+        self._patch_xrefs(monkeypatch, lr)
+        backend = _make_backend()
+        mock_func = MagicMock()
+        mock_func.getEntryPoint.return_value = _make_mock_addr(0x3000)
+        backend.flat_api.getFunction.return_value = mock_func
+
+        out = analysis._xrefs_sync(backend, [{'name': 'my_func', 'direction': 'to'}])
+        assert out[0]['error'] is None
+        assert out[0]['name'] == 'my_func'
+        assert 'items' in out[0]
+
+    def test_error_path_no_result_wrapper(self):
+        """Error items have 'error' key but no 'result' wrapper."""
+        import mcpyghidra.tools.analysis as analysis
+
+        backend = _make_backend()
+        backend.flat_api.getFunction.return_value = None
+
+        out = analysis._xrefs_sync(backend, [{'name': 'ghost_func', 'direction': 'to'}])
+        item = out[0]
+        assert 'error' in item
+        assert 'result' not in item
+        assert item['error'] is not None

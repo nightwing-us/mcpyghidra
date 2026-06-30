@@ -20,7 +20,7 @@ class TestFindBytes:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None, f'Unexpected error: {entry["error"]}'
-        assert len(entry['matches']) > 0, 'Expected at least one match for prologue byte 0x55'
+        assert len(entry['items']) > 0, 'Expected at least one match for prologue byte 0x55'
 
     def test_find_bytes_wildcard(self, backend):
         """CALL instruction pattern E8 ?? ?? ?? ?? finds call instructions."""
@@ -28,9 +28,9 @@ class TestFindBytes:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None, f'Unexpected error: {entry["error"]}'
-        assert len(entry['matches']) > 0, 'Expected CALL instructions in binary'
+        assert len(entry['items']) > 0, 'Expected CALL instructions in binary'
         # Verify match structure
-        match = entry['matches'][0]
+        match = entry['items'][0]
         assert 'addr' in match
         assert 'bytes' in match
         assert '0x' in match['addr']
@@ -41,7 +41,7 @@ class TestFindBytes:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None
-        assert entry['matches'] == []
+        assert entry['items'] == []
         assert entry['has_more'] is False
 
     def test_find_bytes_pagination(self, backend):
@@ -51,7 +51,7 @@ class TestFindBytes:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None
-        assert len(entry['matches']) <= 2
+        assert len(entry['items']) <= 2
         # If there were more than 2 matches total, has_more should be True
         # (we can't guarantee has_more without knowing total count, but matches should be <=2)
 
@@ -62,7 +62,7 @@ class TestFindBytes:
         for entry in result:
             assert entry['error'] is None
             assert 'pattern' in entry
-            assert 'matches' in entry
+            assert 'items' in entry
             assert 'has_more' in entry
 
     def test_find_bytes_match_structure(self, backend):
@@ -70,7 +70,7 @@ class TestFindBytes:
         result = run_async(find_bytes, backend, ['55'], limit=5)
         entry = result[0]
         assert entry['error'] is None
-        for match in entry['matches']:
+        for match in entry['items']:
             assert 'addr' in match
             assert 'bytes' in match
             # addr should be a hex address string
@@ -91,9 +91,9 @@ class TestFindInsns:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None, f'Unexpected error: {entry["error"]}'
-        assert len(entry['matches']) > 0, 'Expected CALL instructions in binary'
+        assert len(entry['items']) > 0, 'Expected CALL instructions in binary'
         # Verify match structure
-        match = entry['matches'][0]
+        match = entry['items'][0]
         assert 'addr' in match
         assert 'instructions' in match
         assert len(match['instructions']) == 1
@@ -108,7 +108,7 @@ class TestFindInsns:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None
-        assert entry['matches'] == []
+        assert entry['items'] == []
         assert entry['has_more'] is False
 
     def test_find_insns_glob_operand(self, backend):
@@ -121,7 +121,7 @@ class TestFindInsns:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None
-        assert len(entry['matches']) > 0, 'Expected RET instructions in binary'
+        assert len(entry['items']) > 0, 'Expected RET instructions in binary'
 
     def test_find_insns_wildcard_mnemonic(self, backend):
         """Wildcard mnemonic '*' matches any instruction."""
@@ -133,7 +133,7 @@ class TestFindInsns:
         assert len(result) == 1
         entry = result[0]
         assert entry['error'] is None
-        assert len(entry['matches']) > 0
+        assert len(entry['items']) > 0
 
     def test_find_insns_multiple_sequences(self, backend):
         """Batch search with two sequences returns two result entries."""
@@ -147,6 +147,6 @@ class TestFindInsns:
         assert len(result) == 2
         for entry in result:
             assert 'sequence' in entry
-            assert 'matches' in entry
+            assert 'items' in entry
             assert 'has_more' in entry
             assert 'error' in entry

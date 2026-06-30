@@ -880,14 +880,19 @@ class McpToolRegistration:
             Field(
                 default=None,
                 description=(
-                    'Batch: list of {target, direction?, offset?, limit?}. For one target, omit items.'
+                    'Batch: list of {addr?, name?, direction?, offset?, limit?}. '
+                    'Aliases accepted: target/ea/function (0x-prefixed → address, else name). '
+                    'For one target, omit items and pass addr/name.'
                 ),
             ),
         ] = None,
         *,
         target: Annotated[
             str | None,
-            Field(default=None, description='Single: hex address or function name.'),
+            Field(
+                default=None,
+                description='Single: hex address or function name (alias for addr/name).',
+            ),
         ] = None,
         direction: Annotated[
             str | None, Field(default=None, description='Single: "to" or "from".')
@@ -899,13 +904,20 @@ class McpToolRegistration:
             int | None, Field(default=None, description='Single: max results.')
         ] = None,
     ) -> Any:
-        """Cross-references to/from a target. MERGED from xrefs_to + xrefs_from.
+        """Cross-references to/from an address or function. MERGED from xrefs_to + xrefs_from.
 
-        RETURNS: a dict (single call) or list of dicts (batch), each with:
-        - refs: ListResult with cross-reference items (on success)
+        Input accepts addr (hex) or name (function name); aliases target/ea/function also accepted.
+
+        RETURNS: a flat dict (single call) or list of flat dicts (batch), each with:
+        - addr: resolved entry address (hex)
+        - name: echoed when a function name was provided
+        - direction: 'to' or 'from'
+        - items: cross-reference rows
+        - summary, page_info, entry_type, schema_version: lifted from ListResult
         - error: null on success, error message on failure
 
-        Single: pass target/direction/... (returns one dict). Batch: pass items=[…] (returns a list)."""
+        Single: pass target (hex address or function name), direction, offset, limit (returns one dict).
+        Batch: pass items=[…] where each item may use addr/name or aliases target/ea/function (returns a list)."""
         items, single = single_or_batch(
             items,
             {
@@ -990,7 +1002,9 @@ class McpToolRegistration:
             }
           )
 
-        RETURNS: Per-variable status report."""
+        RETURNS: Structured dict with function/addr/results[]/error.
+        results[] items: {var, new_name, new_type, error} — error null on success.
+        Top-level error is null unless function-not-found or no-variables provided."""
         token = _current_mcp_context.set(ctx)
         try:
             return await modify.update_vars(
@@ -1183,7 +1197,8 @@ class McpToolRegistration:
     ) -> Any:
         """Start a manual transaction for multiple modifications.
 
-        RETURNS: Transaction ID string needed to end the transaction.
+        RETURNS: Dict with keys: transaction_id (int), message (str), error (null or str).
+        Use transaction_id with end_trans to commit or rollback.
 
         WHEN TO USE:
         - Most modification tools handle transactions internally
@@ -1192,7 +1207,7 @@ class McpToolRegistration:
         EXAMPLE:
           tx = begin_trans("Rename related functions")
           rename(...)
-          end_trans(tx, commit=True)"""
+          end_trans(tx['transaction_id'], commit=True)"""
         return await modify.begin_trans(self._backend, description)
 
     async def end_trans(
@@ -1207,8 +1222,11 @@ class McpToolRegistration:
         """End a manual transaction started with begin_trans.
 
         PARAMETERS:
-        - transaction_id: ID returned from begin_trans
-        - commit: True to save changes, False to discard/rollback"""
+        - transaction_id: ID returned in begin_trans result dict
+        - commit: True to save changes, False to discard/rollback
+
+        RETURNS: Dict with keys: transaction_id (int), committed (bool),
+        message (str), error (null on success, str on failure)."""
         return await modify.end_trans(self._backend, int(transaction_id), commit)
 
     # --- Type tools ---
@@ -2022,7 +2040,7 @@ def register_resources(
             for addr in sym_table.getExternalEntryPointIterator():
                 sym = sym_table.getPrimarySymbol(addr)
                 entries.append({
-                    'address': f'{addr.offset:#x}',
+                    'addr': f'{addr.offset:#x}',
                     'name': sym.getName() if sym else f'entry_{addr.offset:#x}',
                 })
         except Exception:

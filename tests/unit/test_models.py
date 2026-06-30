@@ -33,6 +33,8 @@ from mcpyghidra.models import (
     SymbolInfo,
     TypeDetails,
     TypeSummary,
+    VarUpdate,
+    VarUpdateReport,
 )
 
 
@@ -293,6 +295,15 @@ class TestStructureCreationResult:
         )
         assert r.created is False
 
+    def test_error_field_present_and_defaults_none(self):
+        """Carries the shared `error` key (None here — create_struct raises on
+        failure) so its shape is uniform with the other result models."""
+        r = StructureCreationResult(
+            name='MyStruct', size=16, created=True, message='ok'
+        )
+        assert r.error is None
+        assert 'error' in r.model_dump()
+
 
 class TestFieldAdditionResult:
     def test_success(self):
@@ -320,6 +331,21 @@ class TestFieldAdditionResult:
             message='Type not found',
         )
         assert r.success is False
+
+    def test_error_none_on_success(self):
+        r = FieldAdditionResult(
+            struct_name='S', field_name='f', offset=0, size=4,
+            success=True, message='Field added',
+        )
+        assert r.error is None
+        assert 'error' in r.model_dump()
+
+    def test_error_derived_from_message_on_failure(self):
+        r = FieldAdditionResult(
+            struct_name='S', field_name='f', offset=0, size=0,
+            success=False, message='Structure not found',
+        )
+        assert r.error == 'Structure not found'
 
 
 class TestBinaryContext:
@@ -683,3 +709,81 @@ class TestCallgraphResult:
 
         with pytest.raises(Exception):
             CallgraphResult(root='0x401000')  # type: ignore[call-arg]
+
+
+class TestVarUpdate:
+    def test_defaults(self):
+        vu = VarUpdate(var='local_8')
+        assert vu.var == 'local_8'
+        assert vu.new_name is None
+        assert vu.new_type is None
+        assert vu.error is None
+
+    def test_with_new_name(self):
+        vu = VarUpdate(var='local_8', new_name='buffer')
+        assert vu.new_name == 'buffer'
+        assert vu.new_type is None
+
+    def test_with_error(self):
+        vu = VarUpdate(var='missing', error="Variable not found in function 'main'")
+        assert vu.error == "Variable not found in function 'main'"
+
+    def test_model_dump_shape(self):
+        vu = VarUpdate(var='v1', new_name='counter', new_type='int *')
+        d = vu.model_dump()
+        assert set(d.keys()) == {'var', 'new_name', 'new_type', 'error'}
+        assert d['var'] == 'v1'
+        assert d['new_name'] == 'counter'
+        assert d['new_type'] == 'int *'
+        assert d['error'] is None
+
+    def test_missing_var_raises(self):
+        with pytest.raises(Exception):
+            VarUpdate()  # type: ignore[call-arg]
+
+
+class TestVarUpdateReport:
+    def test_defaults(self):
+        r = VarUpdateReport(function='main')
+        assert r.function == 'main'
+        assert r.addr is None
+        assert r.results == []
+        assert r.error is None
+
+    def test_function_level_error(self):
+        r = VarUpdateReport(function='ghost', addr=None, results=[], error='Function not found')
+        assert r.error == 'Function not found'
+        assert r.addr is None
+        assert r.results == []
+
+    def test_with_results(self):
+        items = [
+            VarUpdate(var='v1', new_name='buffer', new_type='char *'),
+            VarUpdate(var='x', error="Variable not found in function 'main'"),
+        ]
+        r = VarUpdateReport(function='main', addr='0x401136', results=items)
+        assert r.addr == '0x401136'
+        assert len(r.results) == 2
+        assert r.results[0].error is None
+        assert r.results[1].error is not None
+
+    def test_model_dump_shape(self):
+        r = VarUpdateReport(
+            function='main',
+            addr='0x401136',
+            results=[VarUpdate(var='a1', new_name='argc')],
+        )
+        d = r.model_dump()
+        assert set(d.keys()) == {'function', 'addr', 'results', 'error'}
+        assert d['function'] == 'main'
+        assert d['addr'] == '0x401136'
+        assert d['error'] is None
+        assert isinstance(d['results'], list)
+        assert len(d['results']) == 1
+        assert d['results'][0]['var'] == 'a1'
+        assert d['results'][0]['new_name'] == 'argc'
+        assert d['results'][0]['error'] is None
+
+    def test_missing_function_raises(self):
+        with pytest.raises(Exception):
+            VarUpdateReport()  # type: ignore[call-arg]

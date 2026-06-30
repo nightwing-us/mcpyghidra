@@ -11,7 +11,6 @@ Tool merges implemented here:
 
 from __future__ import annotations
 
-import traceback
 from typing import (
     TYPE_CHECKING,
     Dict,
@@ -19,6 +18,7 @@ from typing import (
 
 import anyio
 from mcpyghidra.backend import GhidraBackend, GhidraError
+from mcpyghidra.models import VarUpdate, VarUpdateReport
 from mcpyghidra.tools.core import (
     _get_address,
     _get_function,
@@ -295,7 +295,7 @@ async def update_vars(
     backend: GhidraBackend,
     function_name: str,
     variables_to_update: Dict[str, Dict[str, str]],
-) -> str:
+) -> dict:
     """Rename/retype variables in a function. Keeps existing dict-of-dicts interface.
 
     THIS MODIFIES THE GHIDRA DATABASE.
@@ -316,7 +316,8 @@ async def update_vars(
         }
       )
 
-    RETURNS: Per-variable status report."""
+    RETURNS: Structured dict with keys: function, addr, results (list of per-variable
+    dicts with var/new_name/new_type/error), error (function-level or null)."""
     backend.begin_batch()
     try:
         return await anyio.to_thread.run_sync(
@@ -330,58 +331,76 @@ def _update_vars_sync(
     backend: GhidraBackend,
     function_name: str,
     variables_to_update: Dict[str, Dict[str, str]],
-) -> str:
+) -> dict:
     """Sync implementation — runs in thread pool."""
     if not variables_to_update:
-        return 'ERROR: No variables were provided to update'
+        return VarUpdateReport(
+            function=function_name,
+            addr=None,
+            results=[],
+            error='No variables were provided to update',
+        ).model_dump()
 
-    func = _get_function(backend, name=function_name)
-    dec_func = backend.get_decompiled_func(func=func)
-    aggregate_status: list[str] = []
+    try:
+        func = _get_function(backend, name=function_name)
+        dec_func = backend.get_decompiled_func(func=func)
+    except Exception as e:
+        # Function-level failure (not found, or resolved but won't decompile):
+        # top-level error, empty results, null addr.
+        return VarUpdateReport(
+            function=function_name,
+            addr=None,
+            results=[],
+            error=str(e),
+        ).model_dump()
+
+    addr_hex = f'{func.getEntryPoint().offset:#x}'
+    results: list[VarUpdate] = []
 
     with backend.create_transaction(
         f'Update {len(variables_to_update)} function variables'
     ):
         for var_name, new_vals in variables_to_update.items():
-            ghidra_var = dec_func.get_symbol(var_name)
             new_name = new_vals.get('new_name')
             new_type = new_vals.get('new_type')
-            if not new_name and not new_type:
-                aggregate_status.append(
-                    f'{var_name}: ERROR: at least one of new_name or new_type is required'
-                )
-                continue
-            # If renaming, check the destination doesn't already exist.
-            existing_var = dec_func.get_symbol(new_name) if new_name else None
-            if ghidra_var and not existing_var:
-                try:
-                    # Pass through the original symbol's name when only the
-                    # type is changing, so update() doesn't try to rename.
-                    # GhidraNamedEntity is abstract; concrete subclasses
-                    # (GhidraVariable, GhidraParameter) all expose `.name`.
-                    effective_name = (
-                        new_name if new_name else ghidra_var.name  # type: ignore[attr-defined]
-                    )
-                    ghidra_var.update(
-                        new_name=effective_name,
-                        new_type=new_type or '',
-                        source_type=_ai_source_type(),
-                    )
-                except Exception as e:
-                    trace_str = traceback.format_exc()
-                    aggregate_status.append(f'{var_name}: ERROR: {e}\n{trace_str}')
-                else:
-                    aggregate_status.append(f'{var_name}: Done')
-            else:
-                aggregate_status.append(
-                    f'{var_name}: Variable {new_name} already exists.'
-                )
+            item = VarUpdate(var=var_name, new_name=new_name, new_type=new_type)
 
-    conclusion_msg = (
-        f'Results from updating {len(variables_to_update)} function variables:\n'
-    )
-    conclusion_msg += '\n'.join(aggregate_status)
-    return conclusion_msg
+            if not new_name and not new_type:
+                item.error = 'at least one of new_name or new_type is required'
+            else:
+                ghidra_var = dec_func.get_symbol(var_name)
+                existing_var = dec_func.get_symbol(new_name) if new_name else None
+
+                if ghidra_var and not existing_var:
+                    try:
+                        # Pass through the original symbol's name when only the
+                        # type is changing, so update() doesn't try to rename.
+                        # GhidraNamedEntity is abstract; concrete subclasses
+                        # (GhidraVariable, GhidraParameter) all expose `.name`.
+                        effective_name = (
+                            new_name if new_name else ghidra_var.name  # type: ignore[attr-defined]
+                        )
+                        ghidra_var.update(
+                            new_name=effective_name,
+                            new_type=new_type or '',
+                            source_type=_ai_source_type(),
+                        )
+                    except Exception as e:
+                        item.error = str(e)
+                elif not ghidra_var:
+                    item.error = f"Variable not found in function '{function_name}'"
+                else:
+                    # ghidra_var exists AND existing_var (new name) also exists
+                    item.error = f"target name '{new_name}' already exists"
+
+            results.append(item)
+
+    return VarUpdateReport(
+        function=function_name,
+        addr=addr_hex,
+        results=results,
+        error=None,
+    ).model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -711,10 +730,10 @@ def _patch_sync(backend: GhidraBackend, items: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def begin_trans(backend: GhidraBackend, description: str) -> str:
+async def begin_trans(backend: GhidraBackend, description: str) -> dict:
     """Start a manual transaction for multiple modifications.
 
-    RETURNS: Transaction ID (integer) needed to end the transaction.
+    RETURNS: Dict with keys: transaction_id (int), message (str), error (null or str).
 
     WHEN TO USE:
     - Most modification tools handle transactions internally.
@@ -722,28 +741,42 @@ async def begin_trans(backend: GhidraBackend, description: str) -> str:
     - If you're calling ONE modification tool, you don't need this.
 
     EXAMPLE:
-      tx_id = begin_trans(backend, "Rename related functions")
+      tx = begin_trans(backend, "Rename related functions")
       rename(backend, [...])
-      end_trans(backend, tx_id, commit=True)"""
+      end_trans(backend, tx['transaction_id'], commit=True)"""
     return await anyio.to_thread.run_sync(
         lambda: _begin_trans_sync(backend, description)
     )
 
 
-def _begin_trans_sync(backend: GhidraBackend, description: str) -> str:
+def _begin_trans_sync(backend: GhidraBackend, description: str) -> dict:
     """Sync implementation — runs in thread pool."""
-    tx_id = backend.program.startTransaction(description)
-    return f'Transaction started with ID {tx_id}'
+    try:
+        tx_id = backend.program.startTransaction(description)
+        return {
+            'transaction_id': tx_id,
+            'message': f'Transaction started with ID {tx_id}',
+            'error': None,
+        }
+    except Exception as e:
+        return {
+            'transaction_id': None,
+            'message': str(e),
+            'error': str(e),
+        }
 
 
 async def end_trans(
     backend: GhidraBackend, transaction_id: int, commit: bool = True
-) -> str:
+) -> dict:
     """End a manual transaction started with begin_trans.
 
     PARAMETERS:
     - transaction_id: ID returned from begin_trans
     - commit: True to save changes, False to discard/rollback
+
+    RETURNS: Dict with keys: transaction_id (int), committed (bool), message (str),
+    error (null on success, str on failure).
 
     WHEN TO USE: Only after begin_trans for multi-modification workflows.
     Single modification tools handle transactions internally."""
@@ -752,7 +785,21 @@ async def end_trans(
     )
 
 
-def _end_trans_sync(backend: GhidraBackend, transaction_id: int, commit: bool) -> str:
+def _end_trans_sync(backend: GhidraBackend, transaction_id: int, commit: bool) -> dict:
     """Sync implementation — runs in thread pool."""
-    backend.program.endTransaction(transaction_id, commit)
-    return f'Transaction {transaction_id} ended'
+    try:
+        backend.program.endTransaction(transaction_id, commit)
+        committed_str = 'committed' if commit else 'rolled back'
+        return {
+            'transaction_id': transaction_id,
+            'committed': commit,
+            'message': f'Transaction {transaction_id} {committed_str}',
+            'error': None,
+        }
+    except Exception as e:
+        return {
+            'transaction_id': transaction_id,
+            'committed': False,
+            'message': str(e),
+            'error': str(e),
+        }

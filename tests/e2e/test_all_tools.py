@@ -96,7 +96,7 @@ def binary_addresses(headless_server):
     if data and isinstance(data, dict) and 'items' in data:
         for item in data['items']:
             name = item.get('name', '')
-            addr = item.get('address', '')
+            addr = item.get('addr', '')
             if name in ('main', 'check_password'):
                 addr_map[name] = addr
     assert 'main' in addr_map, (
@@ -705,8 +705,12 @@ class TestUpdateVarsTool:
                 original_var: {'new_name': temp_var},
             },
         })
-        # update_vars returns a human-readable status string
-        assert 'Done' in result or 'Results' in result
+        # update_vars returns a structured JSON dict
+        parsed = json.loads(result)
+        assert parsed['error'] is None, f"update_vars function-level error: {parsed['error']}"
+        assert any(r['error'] is None for r in parsed['results']), (
+            f"No successful result in update_vars: {parsed['results']}"
+        )
 
         # Step 3: decompile again and verify new name appears
         decomp2 = mcp_call(fresh_headless_server, 'decompile', {
@@ -888,41 +892,42 @@ class TestTransactionTools:
     """Tools: begin_trans + end_trans — test as a pair."""
 
     def test_begin_and_commit_transaction(self, headless_server):
-        """begin_trans returns a transaction ID; end_trans commits successfully."""
+        """begin_trans returns a structured dict with transaction_id; end_trans commits."""
         # Step 1: begin transaction
         result_begin = mcp_call(headless_server, 'begin_trans', {
             'description': 'E2E test transaction',
         })
-        assert len(result_begin) > 0
-        # Response: "Transaction started with ID <N>"
-        assert 'transaction' in result_begin.lower()
-
-        # Extract transaction ID (integer)
-        tx_match = re.search(r'\b(\d+)\b', result_begin)
-        assert tx_match is not None, f"Could not parse transaction ID from: {result_begin}"
-        tx_id = int(tx_match.group(1))
+        parsed_begin = json.loads(result_begin)
+        assert parsed_begin['error'] is None, f"begin_trans error: {parsed_begin['error']}"
+        tx_id = parsed_begin['transaction_id']
+        assert tx_id is not None, f"begin_trans returned no transaction_id: {parsed_begin}"
 
         # Step 2: end transaction (commit=True)
         result_end = mcp_call(headless_server, 'end_trans', {
             'transaction_id': str(tx_id),
             'commit': True,
         })
-        assert 'transaction' in result_end.lower() or str(tx_id) in result_end
+        parsed_end = json.loads(result_end)
+        assert parsed_end['error'] is None, f"end_trans error: {parsed_end['error']}"
+        assert parsed_end['committed'] is True
 
     def test_begin_and_rollback_transaction(self, headless_server):
         """begin_trans + end_trans with commit=False rolls back without error."""
         result_begin = mcp_call(headless_server, 'begin_trans', {
             'description': 'E2E rollback test',
         })
-        tx_match = re.search(r'\b(\d+)\b', result_begin)
-        assert tx_match is not None
-        tx_id = int(tx_match.group(1))
+        parsed_begin = json.loads(result_begin)
+        assert parsed_begin['error'] is None
+        tx_id = parsed_begin['transaction_id']
+        assert tx_id is not None
 
         result_end = mcp_call(headless_server, 'end_trans', {
             'transaction_id': str(tx_id),
             'commit': False,
         })
-        assert len(result_end) > 0
+        parsed_end = json.loads(result_end)
+        assert parsed_end['error'] is None
+        assert parsed_end['committed'] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1268,7 +1273,7 @@ class TestFindBytes:
         assert len(entries) > 0, f'Expected result entries, got empty list from: {result[:200]}'
         entry = entries[0]
         assert entry.get('error') is None, f'find_bytes returned error: {entry.get("error")}'
-        assert len(entry.get('matches', [])) > 0, 'Expected matches for E8 ?? ?? ?? ??'
+        assert len(entry.get('items', [])) > 0, 'Expected matches for E8 ?? ?? ?? ??'
 
     def test_find_no_match(self, headless_server):
         """find_bytes with unlikely pattern returns empty matches."""
@@ -1279,7 +1284,7 @@ class TestFindBytes:
         assert len(entries) > 0, f'Expected result entries, got empty list from: {result[:200]}'
         entry = entries[0]
         assert entry.get('error') is None, f'find_bytes returned error: {entry.get("error")}'
-        assert entry.get('matches') == [], f'Expected no matches, got: {entry.get("matches")}'
+        assert entry.get('items') == [], f'Expected no matches, got: {entry.get("items")}'
 
     def test_find_multiple_patterns(self, headless_server):
         """find_bytes with two patterns returns two result entries."""
@@ -1290,7 +1295,7 @@ class TestFindBytes:
         assert len(entries) == 2, f'Expected 2 entries, got {len(entries)} from: {result[:200]}'
         for entry in entries:
             assert 'pattern' in entry
-            assert 'matches' in entry
+            assert 'items' in entry
             assert 'has_more' in entry
 
 
@@ -1310,7 +1315,7 @@ class TestFindInsns:
         assert len(entries) > 0, f'Expected result entries, got empty list from: {result[:200]}'
         entry = entries[0]
         assert entry.get('error') is None, f'find_insns returned error: {entry.get("error")}'
-        assert len(entry.get('matches', [])) > 0, 'Expected CALL instruction matches'
+        assert len(entry.get('items', [])) > 0, 'Expected CALL instruction matches'
 
     def test_find_no_match(self, headless_server):
         """find_insns with non-existent mnemonic returns empty matches."""
@@ -1321,7 +1326,7 @@ class TestFindInsns:
         assert len(entries) > 0, f'Expected result entries, got empty list from: {result[:200]}'
         entry = entries[0]
         assert entry.get('error') is None, f'find_insns returned error: {entry.get("error")}'
-        assert entry.get('matches') == [], f'Expected no matches, got: {entry.get("matches")}'
+        assert entry.get('items') == [], f'Expected no matches, got: {entry.get("items")}'
 
     def test_find_ret_sequence(self, headless_server):
         """find_insns for RET instruction finds return sites."""
@@ -1332,7 +1337,7 @@ class TestFindInsns:
         assert len(entries) > 0, f'Expected result entries, got empty list from: {result[:200]}'
         entry = entries[0]
         assert entry.get('error') is None, f'find_insns returned error: {entry.get("error")}'
-        assert len(entry.get('matches', [])) > 0, 'Expected RET instruction matches'
+        assert len(entry.get('items', [])) > 0, 'Expected RET instruction matches'
 
 
 # ---------------------------------------------------------------------------
@@ -1364,7 +1369,8 @@ class TestStructPointerType:
                 'param_1': {'new_type': f'{struct_name} *'}
             },
         })
-        assert 'Done' in result or 'param_1' in result
+        parsed = json.loads(result)
+        assert parsed['error'] is None, f"update_vars function-level error: {parsed['error']}"
 
         # Step 3: Verify via fresh decompilation (pyghidra script, not cached decompile tool)
         result = mcp_call(fresh_headless_server, 'pyghidra', {
@@ -1408,8 +1414,9 @@ class TestLocalVarStructPointer:
                 'p': {'new_type': 'Config *'},
             },
         })
-        assert 'Done' in result or 'p' in result, (
-            f"update_vars did not confirm success, got: {result[:300]}"
+        parsed = json.loads(result)
+        assert parsed['error'] is None, (
+            f"update_vars did not confirm success, got: {parsed}"
         )
 
         # Step 2: Verify via fresh decompilation — Config should appear in output
